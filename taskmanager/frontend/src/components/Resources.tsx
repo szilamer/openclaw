@@ -629,8 +629,176 @@ function agentTheme(theme: string) {
   return AGENT_THEME_CLASSES[theme] ?? AGENT_THEME_CLASSES.general;
 }
 
+function QuotaStatusPanel({ quota }: { quota: any }) {
+  if (!quota || quota.error) return null;
+
+  const isRateLimited = quota.rateLimited;
+  const hourlyPct = quota.hourly?.pctLeft ?? -1;
+  const weeklyPct = quota.weekly?.pctLeft ?? -1;
+  const hourlyReset = quota.hourly?.resetIn || '?';
+  const weeklyReset = quota.weekly?.resetIn || '?';
+  const tokenExpires = quota.tokenExpires || '?';
+  const tokenStatus = quota.tokenStatus || 'unknown';
+  const ollamaOk = quota.ollama?.available;
+  const ollamaModels = quota.ollama?.models || [];
+  const ageMs = Date.now() - (quota.ts || 0);
+  const ageMins = Math.round(ageMs / 60000);
+  const stale = ageMins > 10;
+
+  const hourlyBarColor =
+    hourlyPct <= 10 ? 'bg-red-500' : hourlyPct <= 30 ? 'bg-yellow-500' : 'bg-emerald-500';
+  const weeklyBarColor =
+    weeklyPct <= 10 ? 'bg-red-500' : weeklyPct <= 30 ? 'bg-yellow-500' : 'bg-emerald-500';
+
+  return (
+    <div
+      className={`border rounded-xl p-5 ${
+        isRateLimited
+          ? 'border-red-600/60 bg-red-950/30'
+          : 'border-emerald-600/30 bg-slate-900/40'
+      }`}
+    >
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <span
+            className={`w-3 h-3 rounded-full ${
+              isRateLimited ? 'bg-red-500 animate-pulse' : 'bg-emerald-500'
+            }`}
+          />
+          <h2 className="text-sm font-semibold text-slate-200">
+            OpenAI Codex OAuth kvóta
+          </h2>
+          {isRateLimited && (
+            <span className="px-2 py-0.5 text-[10px] font-bold bg-red-900/60 text-red-300 rounded-full border border-red-700/50 uppercase tracking-wide">
+              Rate Limited
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          {stale && (
+            <span className="text-[10px] text-yellow-500">frissítés nem elérhető</span>
+          )}
+          <span className="text-[10px] text-slate-600">
+            {ageMins < 1 ? 'most frissítve' : `${ageMins} perce frissítve`}
+          </span>
+        </div>
+      </div>
+
+      {isRateLimited && (
+        <div className="mb-4 p-3 bg-red-900/20 border border-red-800/40 rounded-lg">
+          <p className="text-sm text-red-300">
+            A modell kvóta elfogyott.{' '}
+            {weeklyPct === 0
+              ? `A heti kvóta ${weeklyReset} múlva frissül.`
+              : `Az órás kvóta ${hourlyReset} múlva frissül.`}
+          </p>
+          <p className="text-xs text-red-400/70 mt-1">
+            Addig a lokális Ollama modell ({ollamaModels.map((m: any) => m.name).join(', ') || '?'}) átveszi a feladatokat.
+          </p>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {/* Hourly quota */}
+        <div>
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-xs text-slate-500">Órás kvóta</span>
+            <span className="text-xs text-slate-400 font-mono">
+              {hourlyPct >= 0 ? `${hourlyPct}%` : '?'}
+            </span>
+          </div>
+          <div className="h-2.5 bg-slate-800 rounded-full overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all duration-500 ${hourlyBarColor}`}
+              style={{ width: `${Math.max(0, hourlyPct)}%` }}
+            />
+          </div>
+          <p className="text-[10px] text-slate-600 mt-1">
+            Frissül: {hourlyReset}
+          </p>
+        </div>
+
+        {/* Weekly quota */}
+        <div>
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-xs text-slate-500">Heti kvóta</span>
+            <span className="text-xs text-slate-400 font-mono">
+              {weeklyPct >= 0 ? `${weeklyPct}%` : '?'}
+            </span>
+          </div>
+          <div className="h-2.5 bg-slate-800 rounded-full overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all duration-500 ${weeklyBarColor}`}
+              style={{ width: `${Math.max(0, weeklyPct)}%` }}
+            />
+          </div>
+          <p className="text-[10px] text-slate-600 mt-1">
+            Frissül: {weeklyReset}
+          </p>
+        </div>
+
+        {/* OAuth token */}
+        <div className="border border-slate-700 rounded-lg p-3 bg-slate-800/20">
+          <p className="text-xs text-slate-500 mb-1">OAuth token</p>
+          <div className="flex items-center gap-2">
+            <span
+              className={`w-2 h-2 rounded-full ${
+                tokenStatus === 'ok'
+                  ? 'bg-emerald-400'
+                  : tokenStatus === 'expired'
+                    ? 'bg-red-400'
+                    : 'bg-yellow-400'
+              }`}
+            />
+            <span
+              className={`text-sm font-medium ${
+                tokenStatus === 'ok' ? 'text-emerald-400' : 'text-red-400'
+              }`}
+            >
+              {tokenStatus === 'ok' ? 'Aktív' : tokenStatus === 'expired' ? 'Lejárt' : tokenStatus}
+            </span>
+          </div>
+          <p className="text-[10px] text-slate-600 mt-1">
+            Lejárat: {tokenExpires}
+          </p>
+        </div>
+
+        {/* Local LLM */}
+        <div className="border border-slate-700 rounded-lg p-3 bg-slate-800/20">
+          <p className="text-xs text-slate-500 mb-1">Helyi LLM (Ollama)</p>
+          <div className="flex items-center gap-2">
+            <span
+              className={`w-2 h-2 rounded-full ${ollamaOk ? 'bg-emerald-400' : 'bg-red-400'}`}
+            />
+            <span
+              className={`text-sm font-medium ${
+                ollamaOk ? 'text-emerald-400' : 'text-red-400'
+              }`}
+            >
+              {ollamaOk ? 'Elérhető' : 'Nem elérhető'}
+            </span>
+          </div>
+          {ollamaModels.length > 0 && (
+            <div className="mt-1 space-y-0.5">
+              {ollamaModels.map((m: any) => (
+                <p key={m.name} className="text-[10px] text-slate-500">
+                  {m.name}{' '}
+                  <span className="text-slate-600">
+                    ({m.params}, {(m.size / 1_073_741_824).toFixed(1)}GB)
+                  </span>
+                </p>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function Resources() {
   const [data, setData] = useState<any>(null);
+  const [quota, setQuota] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [agentsData, setAgentsData] = useState<{ agents: AgentModelInfo[]; defaults: any } | null>(null);
@@ -640,8 +808,12 @@ export function Resources() {
   const load = async () => {
     try {
       setError('');
-      const summary = await api.resources.summary();
+      const [summary, quotaData] = await Promise.all([
+        api.resources.summary(),
+        api.resources.quota().catch(() => null),
+      ]);
       setData(summary);
+      setQuota(quotaData);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Hiba');
     } finally {
@@ -724,6 +896,9 @@ export function Resources() {
         {error && (
           <div className="p-3 bg-red-900/30 border border-red-800 rounded-lg text-red-300 text-sm">{error}</div>
         )}
+
+        {/* Quota Status - most prominent section */}
+        <QuotaStatusPanel quota={quota} />
 
         {/* TODAY - Daily limits section */}
         <div>

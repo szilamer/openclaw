@@ -1,6 +1,7 @@
 services:
   postgres:
     image: postgres:16-alpine
+    container_name: taskmanager_postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: taskmanager
@@ -10,31 +11,45 @@ services:
       - "5433:5432"
     volumes:
       - taskmanager_pgdata:/var/lib/postgresql/data
+    networks:
+      - taskmanager
 
   backend:
     build: ./backend
+    container_name: taskmanager_backend_1
     restart: unless-stopped
     ports:
       - "3000:3000"
     environment:
       DATABASE_URL: postgresql://taskmanager:taskmanager@postgres:5432/taskmanager
-      PORT: 3000
+      PORT: "3000"
       ALLOW_ALL_IPS: "true"
       KB_ROOTS: "/data/openclaw:OpenClaw,/data/taskmanager:TaskManager"
       OPENCLAW_DATA_PATH: "/data/openclaw"
     volumes:
-      - /root/.openclaw:/data/openclaw
+      - ${OPENCLAW_DATA:-/root/openclaw-mirror}:/data/openclaw:ro
       - /root/taskmanager:/data/taskmanager:ro
     depends_on:
       - postgres
+    networks:
+      taskmanager:
+        aliases:
+          - backend
 
   frontend:
     build: ./frontend
+    container_name: taskmanager_frontend_1
     restart: unless-stopped
     ports:
-      - "3010:80"
+      - "8080:80"
     depends_on:
       - backend
+    networks:
+      - taskmanager
 
 volumes:
   taskmanager_pgdata:
+
+networks:
+  taskmanager:
+    name: taskmanager_default

@@ -256,6 +256,7 @@ export const api = {
   resources: {
     summary: () => fetchApi<any>('/api/resources/summary'),
     config: () => fetchApi<any>('/api/resources/config'),
+    quota: () => fetchApi<any>('/api/resources/quota'),
     cronJobs: () => fetchApi<any[]>('/api/resources/cron-jobs'),
     cronHistory: (days = 14) =>
       fetchApi<any[]>(`/api/resources/cron-history?days=${days}`),

@@ -24,6 +24,11 @@ export class ResourcesController {
     return this.resourcesService.getConfig();
   }
 
+  @Get('quota')
+  getQuotaStatus() {
+    return this.resourcesService.getQuotaStatus();
+  }
+
   @Get('cron-jobs')
   getCronJobs() {
     return this.resourcesService.getCronJobs();

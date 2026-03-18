@@ -394,4 +394,21 @@ export class ResourcesService implements OnModuleInit {
       },
     };
   }
+
+  async getQuotaStatus(): Promise<any> {
+    try {
+      const quotaFile = path.join(OPENCLAW_ROOT, 'quota-status.json');
+      const raw = await fs.readFile(quotaFile, 'utf8');
+      return JSON.parse(raw);
+    } catch {
+      return {
+        provider: 'unknown',
+        hourly: { pctLeft: -1, resetIn: 'unknown' },
+        weekly: { pctLeft: -1, resetIn: 'unknown' },
+        rateLimited: false,
+        ts: 0,
+        error: 'quota-status.json not found',
+      };
+    }
+  }
 }

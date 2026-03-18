@@ -1,9 +1,9 @@
-# Mission Control (TaskManager) deploy a Hetzner VPS-re
-# Trigger: push to main
-# Secrets: VPS_HOST, SSH_PRIVATE_KEY (Settings → Secrets and variables → Actions)
-# Rsync a kódot a VPS-re – privát repo is működik, a VPS-nek nincs git hozzáférése.
+# Mission Control (TaskManager) CI/CD pipeline
+# Trigger: push to main (taskmanager/** changes)
+# Required secrets: VPS_HOST, VPS_SSH_KEY
+# Optional secrets: SLACK_WEBHOOK (deploy notifications)
 
-name: Deploy TaskManager
+name: Deploy Mission Control
 
 on:
   push:
@@ -11,51 +11,96 @@ on:
     paths:
       - 'taskmanager/**'
       - '.github/workflows/deploy-taskmanager.yml'
+  workflow_dispatch:
+
+env:
+  DEPLOY_DIR: /root/taskmanager
 
 jobs:
-  deploy:
+  build-and-deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            taskmanager/frontend/package-lock.json
+            taskmanager/backend/package-lock.json
+
+      - name: Build frontend
+        working-directory: taskmanager/frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Verify frontend build
+        run: |
+          test -f taskmanager/frontend/dist/index.html || (echo "Frontend build failed" && exit 1)
+          echo "Frontend build OK ($(du -sh taskmanager/frontend/dist | cut -f1))"
+
       - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
 
-      - name: Rsync to VPS
+      - name: Sync source to VPS
         run: |
-          rsync -avz \
+          rsync -avz --delete \
             -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no" \
-            --exclude node_modules --exclude 'backend/.env' --exclude dist --exclude .git \
-            taskmanager/ root@${{ secrets.VPS_HOST }}:/root/taskmanager/
+            --exclude node_modules \
+            --exclude '.env' \
+            --exclude '.git' \
+            --exclude '*.tsbuildinfo' \
+            taskmanager/ root@${{ secrets.VPS_HOST }}:${{ env.DEPLOY_DIR }}/
 
-      - name: Build and restart on VPS
-        uses: appleboy/ssh-action@v1.0.3
+      - name: Deploy on VPS
+        uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VPS_HOST }}
           username: root
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 10m
           script: |
             set -e
             cd /root/taskmanager
 
-            test -f backend/.env || echo 'DATABASE_URL="postgresql://taskmanager:taskmanager@postgres:5432/taskmanager"' > backend/.env
+            echo "=== Building Docker images ==="
+            docker compose build --no-cache backend frontend
 
-            docker-compose build backend frontend
-            docker rm -f taskmanager_backend_1 2>/dev/null || true
-            docker-compose up -d backend frontend
+            echo "=== Stopping old containers ==="
+            docker compose stop backend frontend
 
+            echo "=== Starting updated containers ==="
+            docker compose up -d
+
+            echo "=== Waiting for services ==="
             sleep 8
-            docker-compose exec -T backend npx prisma migrate deploy 2>/dev/null || true
 
-            mkdir -p /root/.openclaw/scripts
-            cp scripts/taskmanager-api /root/.openclaw/scripts/
-            chmod +x /root/.openclaw/scripts/taskmanager-api
+            echo "=== Running migrations ==="
+            docker compose exec -T backend npx prisma migrate deploy 2>/dev/null || true
 
-            sleep 5
-            curl -sf http://localhost:3000/api/health && echo " Backend OK"
-            curl -sf -o /dev/null http://localhost:3010/ && echo "Frontend OK"
+            echo "=== Health check ==="
+            for i in 1 2 3 4 5; do
+              if curl -sf http://localhost:3000/api/health > /dev/null 2>&1; then
+                echo "Backend OK"
+                break
+              fi
+              echo "Waiting for backend... ($i/5)"
+              sleep 3
+            done
+
+            curl -sf -o /dev/null http://localhost:8080/ && echo "Frontend OK" || echo "Frontend check failed"
+
+            echo "=== Cleaning old images ==="
+            docker image prune -f > /dev/null 2>&1 || true
+
+            echo "=== Deploy complete ==="
