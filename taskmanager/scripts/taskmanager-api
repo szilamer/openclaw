@@ -1,0 +1,53 @@
+#!/bin/sh
+# TaskManager API helper - OpenClaw/Sophon integráció
+# Használat: taskmanager-api GET|POST|PATCH|DELETE /path [body]
+# Credentials: TASKMANAGER_URL, TASKMANAGER_TOKEN env vars
+
+set -e
+
+METHOD="${1:?Usage: taskmanager-api METHOD ENDPOINT [BODY]}"
+ENDPOINT="${2:?Usage: taskmanager-api METHOD ENDPOINT [BODY]}"
+BODY="${3:-}"
+
+BASE="${TASKMANAGER_URL:-http://localhost:3000/api}"
+TOKEN="${TASKMANAGER_TOKEN:-}"
+
+if [ -z "$TOKEN" ]; then
+  echo "Error: TASKMANAGER_TOKEN not set" >&2
+  exit 1
+fi
+
+# URL összeállítás - endpoint már /-tal kezdődhet
+PATH_PART="${ENDPOINT#/}"
+URL="${BASE}/${PATH_PART}"
+
+# Timeout: 10s connect, 30s total (agent stability)
+CURL_TIMEOUT="--connect-timeout 10 --max-time 30"
+
+case "$METHOD" in
+  GET)
+    curl -s $CURL_TIMEOUT -H "Authorization: Bearer $TOKEN" "$URL"
+    ;;
+  POST)
+    if [ -n "$BODY" ]; then
+      curl -s $CURL_TIMEOUT -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$BODY" "$URL"
+    else
+      curl -s $CURL_TIMEOUT -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" "$URL"
+    fi
+    ;;
+  PATCH)
+    if [ -n "$BODY" ]; then
+      curl -s $CURL_TIMEOUT -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$BODY" "$URL"
+    else
+      echo "Error: PATCH requires body" >&2
+      exit 1
+    fi
+    ;;
+  DELETE)
+    curl -s $CURL_TIMEOUT -X DELETE -H "Authorization: Bearer $TOKEN" "$URL"
+    ;;
+  *)
+    echo "Error: Unknown method $METHOD" >&2
+    exit 1
+    ;;
+esac

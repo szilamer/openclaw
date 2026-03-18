@@ -1,0 +1,271 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  passwordHash String   @map("password_hash")
+  name         String?
+  role         String   @default("user") // admin, user, agent
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  projectMembers ProjectMember[]
+  assignedTasks  Task[]           @relation("Assignee")
+  comments       TaskComment[]
+  agentTokens    AgentToken[]
+}
+
+model AgentToken {
+  id        String   @id @default(uuid())
+  tokenHash String   @map("token_hash") // bcrypt hash of the token
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  scopes    String[] // tasks:read, tasks:write, projects:read, comments:write
+  allowedIps String? @map("allowed_ips") // comma-separated, e.g. "23.88.58.202"
+  createdAt DateTime @default(now()) @map("created_at")
+  lastUsedAt DateTime? @map("last_used_at")
+
+  agentActions AgentAction[]
+}
+
+model Project {
+  id             String   @id @default(uuid())
+  name           String
+  description    String?
+  image          String?  // base64 data-url or external URL
+  color          String?  @default("#f59e0b")
+  priority       Int      @default(5) // 1-10, higher = more important
+  knowledgeBase  String?  @map("knowledge_base") @db.Text
+  kbFileName     String?  @map("kb_file_name") // memory/projects/*.md filename
+  kbSyncedAt     DateTime? @map("kb_synced_at") // last successful sync timestamp
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  members     ProjectMember[]
+  tasks       Task[]
+  contacts    ProjectContact[]
+  subProjects SubProject[]
+}
+
+model SubProject {
+  id              String   @id @default(uuid())
+  projectId       String   @map("project_id")
+  project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name            String
+  description     String?
+  requirements    String?  @db.Text
+  color           String?  @default("#3b82f6")
+  status          SubProjectStatus @default(active)
+  planningStatus  PlanningStatus   @default(none) @map("planning_status")
+  planningTaskId  String?  @map("planning_task_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  tasks Task[] @relation("SubProjectTasks")
+
+  @@map("sub_projects")
+}
+
+enum SubProjectStatus {
+  active
+  completed
+  archived
+}
+
+enum PlanningStatus {
+  none
+  pending
+  triggered
+  in_progress
+  completed
+  failed
+}
+
+model ProjectContact {
+  id        String   @id @default(uuid())
+  projectId String   @map("project_id")
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name      String
+  role      String?  // Ügyfél, Partner, Fejlesztő, Tanácsadó, stb.
+  email     String?
+  phone     String?
+  company   String?
+  notes     String?
+  isExternal Boolean @default(true) @map("is_external")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("project_contacts")
+}
+
+model ProjectMember {
+  id        String   @id @default(uuid())
+  projectId String  @map("project_id")
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  userId    String  @map("user_id")
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      String  @default("member") // owner, member
+
+  @@unique([projectId, userId])
+  @@map("project_members")
+}
+
+enum TaskStatus {
+  Beérkező
+  Teendő
+  Folyamatban
+  Várakozás
+  Felülvizsgálat
+  Kész
+}
+
+enum TaskPriority {
+  low
+  medium
+  high
+  critical
+}
+
+enum TaskSourceType {
+  manual
+  email
+  agent
+}
+
+model Task {
+  id          String        @id @default(uuid())
+  shortId     Int           @unique @default(autoincrement()) @map("short_id")
+  projectId    String        @map("project_id")
+  project      Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  subProjectId String?       @map("sub_project_id")
+  subProject   SubProject?   @relation("SubProjectTasks", fields: [subProjectId], references: [id], onDelete: SetNull)
+  title        String
+  description String?
+  status      TaskStatus    @default(Teendő)
+  priority    TaskPriority  @default(medium)
+  assigneeId  String?       @map("assignee_id")
+  assignee    User?         @relation("Assignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  dueAt       DateTime?    @map("due_at")
+  sourceType  TaskSourceType @default(manual) @map("source_type")
+  sourceRef   String?       @map("source_ref") // e.g. email UID
+  createdAt   DateTime     @default(now()) @map("created_at")
+  updatedAt   DateTime     @updatedAt @map("updated_at")
+  closedAt             DateTime?    @map("closed_at")
+  deletedAt            DateTime?    @map("deleted_at")
+  liveStatus           String?      @map("live_status")
+  liveStatusUpdatedAt  DateTime?    @map("live_status_updated_at")
+  notes                String?
+  startAt              DateTime?    @map("start_at")
+  estimatedHours       Float?       @map("estimated_hours")
+
+  statusHistory TaskStatusHistory[]
+  comments      TaskComment[]
+  labelLinks   TaskLabelLink[]
+  agentActions  AgentAction[]
+  emailLinks    EmailTaskLink[]
+  dependsOn    TaskDependency[] @relation("DependentTask")
+  dependedBy   TaskDependency[] @relation("PrerequisiteTask")
+}
+
+model TaskDependency {
+  id              String   @id @default(uuid())
+  dependentId     String   @map("dependent_id")
+  dependent       Task     @relation("DependentTask", fields: [dependentId], references: [id], onDelete: Cascade)
+  prerequisiteId  String   @map("prerequisite_id")
+  prerequisite    Task     @relation("PrerequisiteTask", fields: [prerequisiteId], references: [id], onDelete: Cascade)
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@unique([dependentId, prerequisiteId])
+  @@map("task_dependencies")
+}
+
+model TaskStatusHistory {
+  id         String   @id @default(uuid())
+  taskId     String   @map("task_id")
+  task       Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  fromStatus String   @map("from_status")
+  toStatus   String   @map("to_status")
+  changedBy  String?  @map("changed_by") // user id or "agent"
+  changedAt  DateTime @default(now()) @map("changed_at")
+
+  @@map("task_status_history")
+}
+
+model TaskComment {
+  id        String   @id @default(uuid())
+  taskId    String   @map("task_id")
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  content   String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("task_comments")
+}
+
+model TaskLabel {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  color     String   @default("#6b7280")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  links TaskLabelLink[]
+}
+
+model TaskLabelLink {
+  id       String   @id @default(uuid())
+  taskId   String   @map("task_id")
+  task     Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  labelId  String   @map("label_id")
+  label    TaskLabel @relation(fields: [labelId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([taskId, labelId])
+  @@map("task_label_links")
+}
+
+model EmailMessage {
+  id         String   @id @default(uuid())
+  from       String
+  to         String
+  subject    String
+  date       DateTime
+  body       String?
+  sourceUid  String   @unique @map("source_uid")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  taskLinks EmailTaskLink[]
+}
+
+model EmailTaskLink {
+  id        String   @id @default(uuid())
+  emailId   String   @map("email_id")
+  email     EmailMessage @relation(fields: [emailId], references: [id], onDelete: Cascade)
+  taskId    String   @map("task_id")
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([emailId, taskId])
+  @@map("email_task_links")
+}
+
+model AgentAction {
+  id             String   @id @default(uuid())
+  tokenId        String   @map("token_id")
+  token          AgentToken @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+  taskId         String?  @map("task_id")
+  task           Task?    @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  actionType     String   @map("action_type") // create, update, status_change, comment
+  payloadHash    String?  @map("payload_hash")
+  idempotencyKey String? @unique @map("idempotency_key")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@map("agent_actions")
+}

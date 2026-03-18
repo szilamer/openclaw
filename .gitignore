@@ -1,0 +1,38 @@
+# Secrets
+start-openclaw.sh
+egyszeru-telepites.sh
+openai-api-key-inditas.sh
+anthropic-api-key-inditas.sh
+*.env
+.env*
+
+# API keys / credentials (ne kerüljenek a repóba)
+ANTHROPIC-API-KULCS.md
+OPENAI-API-KULCS.md
+CLAW-UI-BEALLITASOK.md
+
+# Dependencies
+node_modules/
+
+# Build
+dist/
+*.tsbuildinfo
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+.cursor/
+
+# Docker
+docker-compose.override.yml
+
+# Upstream OpenClaw repo (külön projekt)
+repo/

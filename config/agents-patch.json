@@ -1,0 +1,90 @@
+{
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "openai-codex/gpt-5.3-codex",
+        "fallbacks": ["openai/gpt-5-nano"]
+      },
+      "budget": {
+        "dailyMaxUsd": 5.0,
+        "warningThresholdPct": 80,
+        "strategy": "fallback",
+        "fallbackModel": "openai/gpt-5-nano"
+      },
+      "subagents": {
+        "maxSpawnDepth": 2,
+        "maxChildrenPerAgent": 5,
+        "maxConcurrent": 8
+      }
+    },
+    "list": [
+      {
+        "id": "sophon",
+        "default": true,
+        "name": "Sophon",
+        "identity": {
+          "name": "Sophon",
+          "theme": "orchestrator",
+          "emoji": "🌐"
+        },
+        "subagents": {
+          "allowAgents": [
+            "dingyi",
+            "luoji",
+            "dashi"
+          ]
+        }
+      },
+      {
+        "id": "dingyi",
+        "name": "DingYi",
+        "model": {
+          "primary": "openai-codex/gpt-5.3-codex",
+          "fallbacks": ["openai/gpt-5-nano"]
+        },
+        "workspace": "/home/node/.openclaw/workspace-dingyi",
+        "agentDir": "/home/node/.openclaw/agents/dingyi/agent",
+        "identity": {
+          "name": "DingYi",
+          "theme": "developer",
+          "emoji": "🔧"
+        },
+        "tools": {
+          "profile": "coding"
+        },
+        "sandbox": {
+          "mode": "all",
+          "workspaceAccess": "rw"
+        }
+      },
+      {
+        "id": "luoji",
+        "name": "LuoJi",
+        "workspace": "/home/node/.openclaw/workspace-luoji",
+        "agentDir": "/home/node/.openclaw/agents/luoji/agent",
+        "identity": {
+          "name": "LuoJi",
+          "theme": "marketing",
+          "emoji": "📢"
+        },
+        "tools": {
+          "profile": "messaging"
+        }
+      },
+      {
+        "id": "dashi",
+        "name": "Da Shi",
+        "workspace": "/home/node/.openclaw/workspace-dashi",
+        "agentDir": "/home/node/.openclaw/agents/dashi/agent",
+        "identity": {
+          "name": "Da Shi",
+          "theme": "security",
+          "emoji": "🛡️"
+        },
+        "tools": {
+          "profile": "full"
+        }
+      }
+    ]
+  }
+}
