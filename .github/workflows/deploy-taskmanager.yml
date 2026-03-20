@@ -11,15 +11,22 @@ on:
       - '.github/workflows/deploy-taskmanager.yml'
   workflow_dispatch:
 
-env:
-  DEPLOY_DIR: /root/taskmanager
-
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
     steps:
+      - name: Debug secrets
+        run: |
+          echo "VPS_HOST length: ${#VPS_HOST}"
+          echo "VPS_SSH_KEY length: ${#VPS_SSH_KEY}"
+          echo "VPS_HOST first 5: ${VPS_HOST:0:5}"
+          echo "VPS_SSH_KEY first 20: ${VPS_SSH_KEY:0:20}"
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -28,34 +35,28 @@ jobs:
         with:
           node-version: 22
 
-      - name: Install frontend deps
+      - name: Install and build frontend
         working-directory: taskmanager/frontend
-        run: npm ci
-
-      - name: Build frontend
-        working-directory: taskmanager/frontend
-        run: npm run build
-
-      - name: Verify frontend build
-        run: |
-          test -f taskmanager/frontend/dist/index.html || (echo "Frontend build failed" && exit 1)
-          echo "Frontend build OK ($(du -sh taskmanager/frontend/dist | cut -f1))"
+        run: npm ci && npm run build
 
       - name: Setup SSH key
         run: |
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
+          wc -c ~/.ssh/deploy_key
+          head -1 ~/.ssh/deploy_key
           ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Test SSH connection
+        run: |
+          ssh -vvv -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=15 root@${{ secrets.VPS_HOST }} 'echo CONNECTION_OK' 2>&1 | tail -30
 
       - name: Sync source to VPS
         run: |
           rsync -avz --delete \
             -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no" \
-            --exclude node_modules \
-            --exclude '.env' \
-            --exclude '.git' \
-            --exclude '*.tsbuildinfo' \
+            --exclude node_modules --exclude '.env' --exclude '.git' --exclude '*.tsbuildinfo' \
             taskmanager/ root@${{ secrets.VPS_HOST }}:/root/taskmanager/
 
       - name: Deploy on VPS
