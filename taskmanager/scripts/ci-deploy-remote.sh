@@ -3,6 +3,25 @@
 set -euxo pipefail
 cd /root/taskmanager
 
+echo "=== Ensure missioncontrol_net exists ==="
+docker network create missioncontrol_net 2>/dev/null || true
+
+echo "=== Ensure Postgres is running ==="
+if ! docker ps --format '{{.Names}}' | grep -q taskmanager_postgres; then
+  docker start taskmanager_postgres 2>/dev/null || \
+  docker run -d --name taskmanager_postgres --restart unless-stopped \
+    --network missioncontrol_net \
+    -e POSTGRES_USER=taskmanager -e POSTGRES_PASSWORD=taskmanager -e POSTGRES_DB=taskmanager \
+    -p 5433:5432 \
+    -v taskmanager_pgdata:/var/lib/postgresql/data \
+    postgres:16-alpine
+fi
+docker network connect missioncontrol_net taskmanager_postgres 2>/dev/null || true
+for i in $(seq 1 15); do
+  docker exec taskmanager_postgres pg_isready -U taskmanager -d taskmanager >/dev/null 2>&1 && break
+  echo "waiting postgres $i/15..."; sleep 2
+done
+
 echo "=== Build backend image ==="
 docker build -q -t taskmanager_backend:latest ./backend
 
