@@ -1,7 +1,6 @@
 # Mission Control (TaskManager) CI/CD pipeline
 # Trigger: push to main (taskmanager/** changes)
 # Required secrets: VPS_HOST, VPS_SSH_KEY
-# Optional secrets: SLACK_WEBHOOK (deploy notifications)
 
 name: Deploy Mission Control
 
@@ -23,7 +22,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v5
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -45,13 +44,16 @@ jobs:
           test -f taskmanager/frontend/dist/index.html || (echo "Frontend build failed" && exit 1)
           echo "Frontend build OK ($(du -sh taskmanager/frontend/dist | cut -f1))"
 
-      - name: Setup SSH
+      - name: Setup SSH key
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
         run: |
+          set -euo pipefail
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
-          # Secret lehet többsoros PEM vagy escaped \n — mindkettőt kezeljük
-          printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" | sed 's/\\n/\n/g' > ~/.ssh/deploy_key
+          printf '%s\n' "$VPS_SSH_KEY" | sed 's/\\n/\n/g' > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
+          test -s ~/.ssh/deploy_key || { echo "VPS_SSH_KEY empty or missing"; exit 1; }
           ssh-keyscan -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null || true
 
       - name: Sync source to VPS
@@ -68,69 +70,13 @@ jobs:
             --exclude '*.tsbuildinfo' \
             taskmanager/ "root@${VPS_HOST}:${DEPLOY_DIR}/"
 
-      # Ugyanaz a kulcsfájl, mint az rsync-nél (escaped \n → valódi újsor az appleboy-nak is)
-      - name: Deploy on VPS
-        uses: appleboy/ssh-action@v1.2.5
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: root
-          key_path: /home/runner/.ssh/deploy_key
-          command_timeout: 25m
-          script_stop: true
-          script: |
-            set -euo pipefail
-            cd /root/taskmanager
-
-            # Régi docker run frontend ugyanazzal a névvel, mint a compose → ütközés
-            docker rm -f taskmanager_frontend_1 2>/dev/null || true
-
-            # A VPS-en a "taskmanager_default" hálózatra romify/openclaw is rákapcsolódott;
-            # Compose v2 elutasítja (címke ≠ v2). A compose fájl most: missioncontrol_net.
-            echo "=== Build & up full stack (missioncontrol_net) ==="
-            docker compose build backend frontend
-            docker compose up -d --force-recreate
-
-            echo "=== Waiting for Postgres ==="
-            for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
-              if docker compose exec -T postgres pg_isready -U taskmanager -d taskmanager >/dev/null 2>&1; then
-                echo "Postgres ready"
-                break
-              fi
-              echo "Waiting for postgres... ($i/15)"
-              sleep 2
-            done
-
-            echo "=== Waiting for backend process ==="
-            sleep 5
-
-            echo "=== Running migrations ==="
-            docker compose exec -T backend npx prisma migrate deploy
-
-            echo "=== Health check (backend) ==="
-            BACKEND_OK=0
-            for i in 1 2 3 4 5 6 7 8 9 10; do
-              if curl -sf http://127.0.0.1:3000/api/health >/dev/null 2>&1; then
-                echo "Backend OK"
-                BACKEND_OK=1
-                break
-              fi
-              echo "Waiting for backend... ($i/10)"
-              sleep 3
-            done
-            if [ "$BACKEND_OK" != "1" ]; then
-              echo "Backend health check failed"
-              docker compose logs backend --tail 80 || true
-              exit 1
-            fi
-
-            echo "=== Health check (frontend) ==="
-            curl -sf -o /dev/null http://127.0.0.1:8080/ && echo "Frontend OK" || {
-              echo "Frontend check failed"
-              docker compose logs frontend --tail 40 || true
-              exit 1
-            }
-
-            echo "=== Cleaning dangling images ==="
-            docker image prune -f > /dev/null 2>&1 || true
-
-            echo "=== Deploy complete ==="
+      - name: Deploy on VPS (docker compose)
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          set -euo pipefail
+          ssh -i "$HOME/.ssh/deploy_key" \
+            -o StrictHostKeyChecking=no \
+            -o IdentitiesOnly=yes \
+            "root@${VPS_HOST}" \
+            bash /root/taskmanager/scripts/ci-deploy-remote.sh
