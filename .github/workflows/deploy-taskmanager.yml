@@ -1,6 +1,5 @@
-# Mission Control (TaskManager) CI/CD pipeline
-# Required secrets: VPS_HOST, VPS_SSH_KEY
-
+# Mission Control deploy — push main or manual trigger
+# Secrets: VPS_HOST, VPS_SSH_KEY
 name: Deploy Mission Control
 
 on:
@@ -12,55 +11,35 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-and-deploy:
+  deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-
     steps:
-      - name: Debug secrets
-        run: |
-          echo "VPS_HOST length: ${#VPS_HOST}"
-          echo "VPS_SSH_KEY length: ${#VPS_SSH_KEY}"
-          echo "VPS_HOST first 5: ${VPS_HOST:0:5}"
-          echo "VPS_SSH_KEY first 20: ${VPS_SSH_KEY:0:20}"
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
-
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
 
-      - name: Install and build frontend
+      - name: Build frontend locally (for verify)
         working-directory: taskmanager/frontend
         run: npm ci && npm run build
 
-      - name: Setup SSH key
+      - name: SSH setup
         run: |
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          wc -c ~/.ssh/deploy_key
-          head -1 ~/.ssh/deploy_key
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/key
+          chmod 600 ~/.ssh/key
           ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
 
-      - name: Test SSH connection
-        run: |
-          ssh -vvv -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=15 root@${{ secrets.VPS_HOST }} 'echo CONNECTION_OK' 2>&1 | tail -30
-
-      - name: Sync source to VPS
+      - name: Rsync to VPS
         run: |
           rsync -avz --delete \
-            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no" \
-            --exclude node_modules --exclude '.env' --exclude '.git' --exclude '*.tsbuildinfo' \
+            -e "ssh -i ~/.ssh/key -o StrictHostKeyChecking=no" \
+            --exclude node_modules --exclude .env --exclude .git --exclude '*.tsbuildinfo' \
             taskmanager/ root@${{ secrets.VPS_HOST }}:/root/taskmanager/
 
-      - name: Deploy on VPS
+      - name: Deploy
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+          ssh -i ~/.ssh/key -o StrictHostKeyChecking=no \
             root@${{ secrets.VPS_HOST }} \
-            'bash /root/taskmanager/scripts/ci-deploy-remote.sh'
+            bash /root/taskmanager/scripts/ci-deploy-remote.sh
