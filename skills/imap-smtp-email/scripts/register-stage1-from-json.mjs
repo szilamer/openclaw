@@ -24,10 +24,11 @@ async function main() {
   const data = JSON.parse(raw);
   const emails = data.emails || [];
   const base = process.env.TASKMANAGER_BASE_URL?.replace(/\/$/, '');
-  const token = process.env.TASKMANAGER_AGENT_TOKEN;
+  const token =
+    process.env.TASKMANAGER_AGENT_TOKEN || process.env.TASKMANAGER_TOKEN;
   if (!base || !token) {
     console.error(
-      'TASKMANAGER_BASE_URL és TASKMANAGER_AGENT_TOKEN kell (.env)',
+      'TASKMANAGER_BASE_URL és TASKMANAGER_AGENT_TOKEN (vagy TASKMANAGER_TOKEN) kell (.env)',
     );
     process.exit(2);
   }
