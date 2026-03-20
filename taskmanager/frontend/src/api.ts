@@ -285,7 +285,11 @@ export const api = {
     },
     triageReview: (
       id: string,
-      body: { action: 'approve' | 'reject' | 'set_project'; resolved_project_id?: string },
+      body: {
+        action: 'approve' | 'reject' | 'set_project';
+        resolved_project_id?: string;
+        correction_reason?: string;
+      },
     ) =>
       fetchApi<EmailTriageQueueRow>(`/api/emails/triage/${id}`, {
         method: 'PATCH',

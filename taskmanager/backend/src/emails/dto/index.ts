@@ -45,7 +45,7 @@ export class EmailIntakeDto {
   projectId?: string;
 }
 
-/** Agent (Sophon): staged email + optional OpenAI classification result */
+/** Agent (Sophon): staged email with two-stage LLM classification results */
 export class TriageRegisterDto {
   @ApiProperty()
   @IsString()
@@ -77,6 +77,28 @@ export class TriageRegisterDto {
   @IsString()
   body?: string;
 
+  // Stage 1 — local LLM (Ollama)
+  @ApiPropertyOptional({ description: 'irrelevant | relevant_unknown | classified' })
+  @IsOptional()
+  @IsString()
+  stage1_classification?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  stage1_model?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  stage1_rationale?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  stage1_project_id?: string;
+
+  // Stage 2 — OpenAI (Sophon agent)
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
@@ -102,6 +124,11 @@ export class TriageReviewDto {
   @IsOptional()
   @IsString()
   resolved_project_id?: string;
+
+  @ApiPropertyOptional({ description: 'Reason for overriding LLM classification (learning feedback)' })
+  @IsOptional()
+  @IsString()
+  correction_reason?: string;
 }
 
 export class TriageRuleCreateDto {

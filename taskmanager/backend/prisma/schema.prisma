@@ -53,6 +53,7 @@ model Project {
   tasks       Task[]
   contacts    ProjectContact[]
   subProjects SubProject[]
+  triageStage1Queue    EmailTriageQueue[] @relation("EmailTriageStage1Project")
   triageSuggestedQueue EmailTriageQueue[] @relation("EmailTriageSuggestedProject")
   triageResolvedQueue  EmailTriageQueue[] @relation("EmailTriageResolvedProject")
   triageRoutingRules   TriageRoutingRule[]
@@ -264,6 +265,7 @@ model EmailTaskLink {
 /// Email downloaded on Sophon; LLM suggestion + human review before task creation.
 enum EmailTriageQueueStatus {
   fetched
+  irrelevant
   pending_review
   approved
   rejected
@@ -279,15 +281,25 @@ model EmailTriageQueue {
   bodyText  String?  @map("body_text") @db.Text
   receivedAt DateTime @map("received_at")
 
+  // Stage 1 — local LLM (Ollama)
+  stage1Classification String?  @map("stage1_classification") // irrelevant | relevant_unknown | classified
+  stage1Model          String?  @map("stage1_model")
+  stage1Rationale      String?  @map("stage1_rationale") @db.Text
+  stage1ProjectId      String?  @map("stage1_project_id")
+  stage1Project        Project? @relation("EmailTriageStage1Project", fields: [stage1ProjectId], references: [id], onDelete: SetNull)
+
+  // Stage 2 — OpenAI (Sophon agent)
   suggestedProjectId String? @map("suggested_project_id")
   suggestedProject   Project? @relation("EmailTriageSuggestedProject", fields: [suggestedProjectId], references: [id], onDelete: SetNull)
+  llmModel           String? @map("llm_model")
+  llmRationale       String? @map("llm_rationale") @db.Text
+
+  // Human review
   resolvedProjectId  String? @map("resolved_project_id")
   resolvedProject    Project? @relation("EmailTriageResolvedProject", fields: [resolvedProjectId], references: [id], onDelete: SetNull)
+  correctionReason   String? @map("correction_reason") @db.Text
 
   status EmailTriageQueueStatus @default(fetched)
-
-  llmModel     String? @map("llm_model")
-  llmRationale String? @map("llm_rationale") @db.Text
 
   taskId String? @unique @map("task_id")
   task   Task?   @relation(fields: [taskId], references: [id], onDelete: SetNull)

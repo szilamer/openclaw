@@ -46,6 +46,11 @@ export class EmailsController {
     return this.emailsService.getTriageRulesForAgent();
   }
 
+  @Get('triage/context')
+  getTriageContext() {
+    return this.emailsService.getTriageContext();
+  }
+
   @Post('triage/register')
   registerTriage(@Body() dto: TriageRegisterDto) {
     return this.emailsService.registerTriage(dto);

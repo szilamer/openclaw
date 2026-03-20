@@ -9,10 +9,25 @@ import type {
 } from '../types';
 
 const STATUS_LABELS: Record<EmailTriageQueueStatus, string> = {
-  fetched: 'Letöltve (nincs LLM)',
+  fetched: 'Letöltve',
+  irrelevant: 'Irreleváns',
   pending_review: 'Ellenőrzésre vár',
   approved: 'Jóváhagyva',
   rejected: 'Elvetve',
+};
+
+const STATUS_COLORS: Record<EmailTriageQueueStatus, string> = {
+  fetched: 'bg-slate-700 text-slate-300',
+  irrelevant: 'bg-slate-800 text-slate-500 line-through',
+  pending_review: 'bg-amber-900/60 text-amber-200',
+  approved: 'bg-emerald-900/60 text-emerald-200',
+  rejected: 'bg-red-900/40 text-red-300',
+};
+
+const STAGE1_LABELS: Record<string, string> = {
+  irrelevant: 'Irreleváns',
+  relevant_unknown: 'Releváns (ismeretlen projekt)',
+  classified: 'Besorolva',
 };
 
 const RULE_KINDS = [
@@ -28,11 +43,14 @@ export function EmailTriage() {
   const [queue, setQueue] = useState<EmailTriageQueueRow[]>([]);
   const [rules, setRules] = useState<TriageRoutingRule[]>([]);
   const [filter, setFilter] = useState<EmailTriageQueueStatus | ''>('');
+  const [hideIrrelevant, setHideIrrelevant] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<'queue' | 'rules'>('queue');
 
   const [localProject, setLocalProject] = useState<Record<string, string>>({});
+  const [correctionReasons, setCorrectionReasons] = useState<Record<string, string>>({});
+  const [expandedBody, setExpandedBody] = useState<Record<string, boolean>>({});
   const [ruleDraft, setRuleDraft] = useState<{
     triageId: string;
     kind: string;
@@ -63,6 +81,10 @@ export function EmailTriage() {
     load();
   }, [load]);
 
+  const visibleQueue = hideIrrelevant && !filter
+    ? queue.filter((r) => r.status !== 'irrelevant')
+    : queue;
+
   const projectOptions = projects.map((p) => (
     <option key={p.id} value={p.id}>
       {p.name}
@@ -71,24 +93,41 @@ export function EmailTriage() {
 
   async function setProject(rowId: string, projectId: string) {
     setLocalProject((m) => ({ ...m, [rowId]: projectId }));
+    const reason = correctionReasons[rowId];
     await api.emails.triageReview(rowId, {
       action: 'set_project',
       resolved_project_id: projectId,
+      ...(reason ? { correction_reason: reason } : {}),
     });
     await load();
   }
 
   async function approve(rowId: string) {
     const override = localProject[rowId];
+    const reason = correctionReasons[rowId];
     await api.emails.triageReview(rowId, {
       action: 'approve',
       ...(override ? { resolved_project_id: override } : {}),
+      ...(reason ? { correction_reason: reason } : {}),
     });
     await load();
   }
 
   async function rejectRow(rowId: string) {
-    await api.emails.triageReview(rowId, { action: 'reject' });
+    const reason = correctionReasons[rowId];
+    await api.emails.triageReview(rowId, {
+      action: 'reject',
+      ...(reason ? { correction_reason: reason } : {}),
+    });
+    await load();
+  }
+
+  async function restoreFromIrrelevant(rowId: string) {
+    await api.emails.triageReview(rowId, {
+      action: 'set_project',
+      resolved_project_id: projects[0]?.id || '',
+      correction_reason: 'Visszaállítva irrelevánsból',
+    });
     await load();
   }
 
@@ -116,6 +155,20 @@ export function EmailTriage() {
     await load();
   }
 
+  function toggleBody(id: string) {
+    setExpandedBody((m) => ({ ...m, [id]: !m[id] }));
+  }
+
+  function bestProject(row: EmailTriageQueueRow): string {
+    return row.resolvedProject?.name
+      ?? row.suggestedProject?.name
+      ?? row.stage1Project?.name
+      ?? '—';
+  }
+
+  const irrelevantCount = queue.filter((r) => r.status === 'irrelevant').length;
+  const pendingCount = queue.filter((r) => r.status === 'pending_review').length;
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 p-6 md:p-10">
       <div className="max-w-7xl mx-auto space-y-6">
@@ -125,17 +178,23 @@ export function EmailTriage() {
               Email triage
             </h1>
             <p className="text-slate-400 text-sm mt-1">
-              LLM javaslat javítása, jóváhagyás, routing szabályok — Mission
-              Control
+              Kétlépcsős LLM osztályozás (Ollama + OpenAI) → felhasználói felülbírálat → tanuló szabályok
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => load()}
-            className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-sm border border-slate-600"
-          >
-            Frissítés
-          </button>
+          <div className="flex items-center gap-3">
+            {pendingCount > 0 && (
+              <span className="px-3 py-1 rounded-full bg-amber-900/50 text-amber-200 text-sm font-medium">
+                {pendingCount} ellenőrzésre vár
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() => load()}
+              className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-sm border border-slate-600"
+            >
+              Frissítés
+            </button>
+          </div>
         </header>
 
         {error && (
@@ -154,7 +213,7 @@ export function EmailTriage() {
                 : 'text-slate-400 hover:text-white'
             }`}
           >
-            Sor (email)
+            Sor ({visibleQueue.length})
           </button>
           <button
             type="button"
@@ -189,120 +248,228 @@ export function EmailTriage() {
                   ),
                 )}
               </select>
+
+              {!filter && (
+                <label className="flex items-center gap-2 text-sm text-slate-400 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={hideIrrelevant}
+                    onChange={(e) => setHideIrrelevant(e.target.checked)}
+                    className="rounded bg-slate-800 border-slate-600"
+                  />
+                  Irreleváns elrejtése ({irrelevantCount})
+                </label>
+              )}
             </div>
 
             {loading ? (
               <p className="text-slate-500">Betöltés…</p>
             ) : (
-              <div className="overflow-x-auto rounded-xl border border-slate-800">
-                <table className="w-full text-sm text-left">
-                  <thead className="bg-slate-900/80 text-slate-400 uppercase text-xs">
-                    <tr>
-                      <th className="px-3 py-3">Dátum</th>
-                      <th className="px-3 py-3">Státusz</th>
-                      <th className="px-3 py-3">Feladó</th>
-                      <th className="px-3 py-3">Tárgy</th>
-                      <th className="px-3 py-3">LLM javaslat</th>
-                      <th className="px-3 py-3">Projekt (javítás)</th>
-                      <th className="px-3 py-3">Művelet</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-800">
-                    {queue.length === 0 && (
-                      <tr>
-                        <td
-                          colSpan={7}
-                          className="px-3 py-8 text-center text-slate-500"
-                        >
-                          Nincs sor. A Sophon script{' '}
-                          <code className="text-amber-400/90">
-                            POST /api/emails/triage/register
-                          </code>{' '}
-                          hívásával tölti fel.
-                        </td>
-                      </tr>
-                    )}
-                    {queue.map((row) => {
-                      const canAct =
-                        row.status === 'fetched' ||
-                        row.status === 'pending_review';
-                      const selectValue =
-                        localProject[row.id] ??
-                        row.resolvedProjectId ??
-                        row.suggestedProjectId ??
-                        '';
-                      return (
-                        <tr key={row.id} className="hover:bg-slate-900/50">
-                          <td className="px-3 py-2 whitespace-nowrap text-slate-400">
-                            {new Date(row.receivedAt).toLocaleString('hu-HU')}
-                          </td>
-                          <td className="px-3 py-2">
-                            <span className="inline-flex rounded-md bg-slate-800 px-2 py-0.5 text-xs">
+              <div className="space-y-3">
+                {visibleQueue.length === 0 && (
+                  <div className="rounded-xl border border-slate-800 px-6 py-12 text-center text-slate-500">
+                    Nincs elem.{' '}
+                    {!filter && hideIrrelevant && irrelevantCount > 0
+                      ? `${irrelevantCount} irreleváns el van rejtve.`
+                      : 'A Sophon imap.js triage parancsával tölti fel a sort.'}
+                  </div>
+                )}
+                {visibleQueue.map((row) => {
+                  const canAct =
+                    row.status === 'fetched' ||
+                    row.status === 'pending_review' ||
+                    row.status === 'irrelevant';
+                  const selectValue =
+                    localProject[row.id] ??
+                    row.resolvedProjectId ??
+                    row.suggestedProjectId ??
+                    row.stage1ProjectId ??
+                    '';
+                  const isExpanded = expandedBody[row.id];
+                  const hasCorrection =
+                    selectValue &&
+                    selectValue !== row.suggestedProjectId &&
+                    selectValue !== row.stage1ProjectId;
+
+                  return (
+                    <div
+                      key={row.id}
+                      className={`rounded-xl border border-slate-800 overflow-hidden ${
+                        row.status === 'irrelevant' ? 'opacity-60' : ''
+                      }`}
+                    >
+                      {/* Header row */}
+                      <div className="flex flex-wrap items-start gap-3 px-4 py-3 bg-slate-900/50">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span
+                              className={`inline-flex rounded-md px-2 py-0.5 text-xs font-medium ${STATUS_COLORS[row.status]}`}
+                            >
                               {STATUS_LABELS[row.status]}
                             </span>
-                            {row.task &&
-                              (row.resolvedProjectId || row.suggestedProjectId) && (
+                            <span className="text-xs text-slate-500">
+                              {new Date(row.receivedAt).toLocaleString('hu-HU')}
+                            </span>
+                            {row.task && (
                               <Link
                                 to={`/project/${row.resolvedProjectId || row.suggestedProjectId}`}
-                                className="block text-amber-400/90 text-xs mt-1 hover:underline"
+                                className="text-amber-400/90 text-xs hover:underline"
                               >
                                 Task #{row.task.shortId}
                               </Link>
                             )}
-                          </td>
-                          <td className="px-3 py-2 max-w-[140px] truncate text-slate-300" title={row.fromEmail}>
-                            {row.fromEmail}
-                          </td>
-                          <td className="px-3 py-2 max-w-[200px]">
-                            <span className="line-clamp-2" title={row.subject}>
-                              {row.subject}
-                            </span>
-                            {row.llmRationale && (
-                              <p
-                                className="text-xs text-slate-500 mt-1 line-clamp-2"
-                                title={row.llmRationale}
-                              >
-                                {row.llmRationale}
-                              </p>
-                            )}
-                          </td>
-                          <td className="px-3 py-2 text-slate-300">
-                            {row.suggestedProject?.name ?? '—'}
-                          </td>
-                          <td className="px-3 py-2">
-                            {canAct ? (
-                              <select
-                                value={selectValue}
-                                onChange={(e) =>
-                                  setProject(row.id, e.target.value)
-                                }
-                                className="w-full max-w-[180px] bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs"
-                              >
-                                <option value="">— válassz —</option>
-                                {projectOptions}
-                              </select>
-                            ) : (
-                              <span>
-                                {row.resolvedProject?.name ??
-                                  row.suggestedProject?.name ??
-                                  '—'}
+                          </div>
+                          <div className="text-sm font-medium text-slate-200 truncate">
+                            {row.subject}
+                          </div>
+                          <div className="text-xs text-slate-400 mt-0.5">
+                            <span className="font-mono">{row.fromEmail}</span>
+                            {' → '}
+                            <span className="font-mono">{row.toEmail}</span>
+                          </div>
+                        </div>
+
+                        {/* Best project */}
+                        <div className="text-right text-sm">
+                          <div className="text-slate-400 text-xs mb-0.5">Projekt:</div>
+                          <div className="text-slate-200 font-medium">{bestProject(row)}</div>
+                        </div>
+                      </div>
+
+                      {/* LLM stages */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-px bg-slate-800">
+                        {/* Stage 1 */}
+                        <div className="bg-slate-950 px-4 py-2">
+                          <div className="text-xs text-slate-500 mb-1 flex items-center gap-1.5">
+                            <span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-500" />
+                            Stage 1 — {row.stage1Model || 'Ollama'}
+                          </div>
+                          {row.stage1Classification ? (
+                            <>
+                              <span className="text-xs font-medium text-blue-300">
+                                {STAGE1_LABELS[row.stage1Classification] || row.stage1Classification}
                               </span>
-                            )}
-                          </td>
-                          <td className="px-3 py-2 whitespace-nowrap space-x-1">
-                            {canAct && (
+                              {row.stage1Project && (
+                                <span className="text-xs text-slate-400 ml-2">
+                                  → {row.stage1Project.name}
+                                </span>
+                              )}
+                              {row.stage1Rationale && (
+                                <p className="text-xs text-slate-500 mt-0.5 line-clamp-2">
+                                  {row.stage1Rationale}
+                                </p>
+                              )}
+                            </>
+                          ) : (
+                            <span className="text-xs text-slate-600">—</span>
+                          )}
+                        </div>
+
+                        {/* Stage 2 */}
+                        <div className="bg-slate-950 px-4 py-2">
+                          <div className="text-xs text-slate-500 mb-1 flex items-center gap-1.5">
+                            <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                            Stage 2 — {row.llmModel || 'OpenAI'}
+                          </div>
+                          {row.suggestedProject ? (
+                            <>
+                              <span className="text-xs font-medium text-emerald-300">
+                                → {row.suggestedProject.name}
+                              </span>
+                              {row.llmRationale && (
+                                <p className="text-xs text-slate-500 mt-0.5 line-clamp-2">
+                                  {row.llmRationale}
+                                </p>
+                              )}
+                            </>
+                          ) : row.llmRationale ? (
+                            <p className="text-xs text-slate-500 line-clamp-2">
+                              {row.llmRationale}
+                            </p>
+                          ) : (
+                            <span className="text-xs text-slate-600">—</span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Body preview toggle */}
+                      {row.bodyText && (
+                        <div className="border-t border-slate-800">
+                          <button
+                            type="button"
+                            onClick={() => toggleBody(row.id)}
+                            className="w-full px-4 py-1.5 text-xs text-slate-500 hover:text-slate-300 text-left"
+                          >
+                            {isExpanded ? '▼ Szöveg elrejtése' : '▶ Email szöveg megjelenítése…'}
+                          </button>
+                          {isExpanded && (
+                            <div className="px-4 pb-3 text-xs text-slate-400 whitespace-pre-wrap max-h-60 overflow-y-auto font-mono leading-relaxed">
+                              {row.bodyText.slice(0, 5000)}
+                              {row.bodyText.length > 5000 && '\n\n… (csonkolva)'}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Actions */}
+                      {canAct && (
+                        <div className="border-t border-slate-800 px-4 py-3 flex flex-wrap items-end gap-3 bg-slate-900/30">
+                          <div className="flex-1 min-w-[200px]">
+                            <label className="text-xs text-slate-500 block mb-1">
+                              Projekt (felülírás):
+                            </label>
+                            <select
+                              value={selectValue}
+                              onChange={(e) => setProject(row.id, e.target.value)}
+                              className="w-full max-w-[250px] bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-xs"
+                            >
+                              <option value="">— válassz —</option>
+                              {projectOptions}
+                            </select>
+                          </div>
+
+                          {hasCorrection && (
+                            <div className="flex-1 min-w-[200px]">
+                              <label className="text-xs text-slate-500 block mb-1">
+                                Miért változtattad? (tanulás):
+                              </label>
+                              <input
+                                type="text"
+                                placeholder="pl. Ez a küldő mindig a Logframe projekthez tartozik"
+                                value={correctionReasons[row.id] || ''}
+                                onChange={(e) =>
+                                  setCorrectionReasons((m) => ({
+                                    ...m,
+                                    [row.id]: e.target.value,
+                                  }))
+                                }
+                                className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-xs"
+                              />
+                            </div>
+                          )}
+
+                          <div className="flex gap-1.5">
+                            {row.status === 'irrelevant' ? (
+                              <button
+                                type="button"
+                                onClick={() => restoreFromIrrelevant(row.id)}
+                                className="px-3 py-1.5 rounded bg-blue-800/60 hover:bg-blue-700/60 text-xs font-medium"
+                              >
+                                Visszaállít
+                              </button>
+                            ) : (
                               <>
                                 <button
                                   type="button"
                                   onClick={() => approve(row.id)}
-                                  className="px-2 py-1 rounded bg-emerald-700/80 hover:bg-emerald-600 text-xs"
+                                  className="px-3 py-1.5 rounded bg-emerald-700/80 hover:bg-emerald-600 text-xs font-medium"
                                 >
                                   Jóváhagy
                                 </button>
                                 <button
                                   type="button"
                                   onClick={() => rejectRow(row.id)}
-                                  className="px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-xs"
+                                  className="px-3 py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-xs"
                                 >
                                   Elvet
                                 </button>
@@ -317,21 +484,31 @@ export function EmailTriage() {
                                       project_id:
                                         selectValue ||
                                         row.suggestedProjectId ||
+                                        row.stage1ProjectId ||
                                         '',
                                     })
                                   }
-                                  className="px-2 py-1 rounded bg-amber-900/60 hover:bg-amber-800/60 text-xs"
+                                  className="px-3 py-1.5 rounded bg-amber-900/60 hover:bg-amber-800/60 text-xs"
                                 >
                                   Szabály
                                 </button>
                               </>
                             )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Existing correction reason */}
+                      {row.correctionReason && (
+                        <div className="border-t border-slate-800 px-4 py-2 bg-amber-950/20">
+                          <span className="text-xs text-amber-400/80">
+                            Korrekció indoklás: {row.correctionReason}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -341,9 +518,8 @@ export function EmailTriage() {
           <div className="space-y-4">
             <p className="text-sm text-slate-400">
               A szabályok sorrendje: <strong>kisebb priority szám</strong> =
-              előbb érvényesül (ugyanúgy, mint az{' '}
-              <code className="text-amber-400/90">POST /api/emails/intake</code>{' '}
-              routingnál).
+              előbb érvényesül. A felhasználói korrekciókból automatikusan is
+              létrehozhatók szabályok a „Szabály" gombbal.
             </p>
             {loading ? (
               <p className="text-slate-500">Betöltés…</p>
@@ -361,6 +537,14 @@ export function EmailTriage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800">
+                    {rules.length === 0 && (
+                      <tr>
+                        <td colSpan={6} className="px-3 py-8 text-center text-slate-500">
+                          Nincs szabály. Használd a „Szabály" gombot egy triage sorból,
+                          vagy hozz létre újat manuálisan.
+                        </td>
+                      </tr>
+                    )}
                     {rules.map((r) => (
                       <tr key={r.id} className="hover:bg-slate-900/50">
                         <td className="px-3 py-2">

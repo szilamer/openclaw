@@ -225,10 +225,18 @@ export class EmailsService {
   }
 
   /**
-   * Sophon pipeline: store downloaded email + optional OpenAI classification.
+   * Sophon pipeline: store downloaded email with two-stage LLM classification.
    * Does not create a task until the user approves in Mission Control.
    */
   async registerTriage(dto: TriageRegisterDto) {
+    let stage1ProjectId: string | null = null;
+    if (dto.stage1_project_id) {
+      const p = await this.prisma.project.findUnique({
+        where: { id: dto.stage1_project_id },
+      });
+      if (p) stage1ProjectId = p.id;
+    }
+
     let suggestedProjectId: string | null = null;
     if (dto.suggested_project_id) {
       const p = await this.prisma.project.findUnique({
@@ -237,9 +245,32 @@ export class EmailsService {
       if (p) suggestedProjectId = p.id;
     }
 
-    const status = suggestedProjectId
-      ? EmailTriageQueueStatus.pending_review
-      : EmailTriageQueueStatus.fetched;
+    const bothIrrelevant =
+      dto.stage1_classification === 'irrelevant' &&
+      !suggestedProjectId &&
+      !dto.llm_rationale;
+
+    let status: EmailTriageQueueStatus;
+    if (bothIrrelevant) {
+      status = EmailTriageQueueStatus.irrelevant;
+    } else if (suggestedProjectId || stage1ProjectId) {
+      status = EmailTriageQueueStatus.pending_review;
+    } else {
+      status = EmailTriageQueueStatus.fetched;
+    }
+
+    const stage1Data = {
+      stage1Classification: dto.stage1_classification ?? null,
+      stage1Model: dto.stage1_model ?? null,
+      stage1Rationale: dto.stage1_rationale ?? null,
+      stage1ProjectId,
+    };
+
+    const stage2Data = {
+      suggestedProjectId,
+      llmModel: dto.llm_model ?? null,
+      llmRationale: dto.llm_rationale ?? null,
+    };
 
     const row = await this.prisma.emailTriageQueue.upsert({
       where: { sourceUid: dto.source_uid },
@@ -251,9 +282,8 @@ export class EmailsService {
         subject: dto.subject,
         bodyText: dto.body ?? null,
         receivedAt: new Date(dto.date),
-        suggestedProjectId,
-        llmModel: dto.llm_model ?? null,
-        llmRationale: dto.llm_rationale ?? null,
+        ...stage1Data,
+        ...stage2Data,
         status,
       },
       update: {
@@ -263,18 +293,14 @@ export class EmailsService {
         subject: dto.subject,
         bodyText: dto.body ?? undefined,
         receivedAt: new Date(dto.date),
-        ...(suggestedProjectId
-          ? {
-              suggestedProjectId,
-              llmModel: dto.llm_model ?? null,
-              llmRationale: dto.llm_rationale ?? null,
-              status: EmailTriageQueueStatus.pending_review,
-            }
-          : {}),
+        ...stage1Data,
+        ...stage2Data,
+        status,
       },
       include: {
-        suggestedProject: true,
-        resolvedProject: true,
+        stage1Project: { select: { id: true, name: true } },
+        suggestedProject: { select: { id: true, name: true } },
+        resolvedProject: { select: { id: true, name: true } },
       },
     });
 
@@ -286,8 +312,9 @@ export class EmailsService {
       where: status ? { status } : undefined,
       orderBy: { receivedAt: 'desc' },
       include: {
-        suggestedProject: true,
-        resolvedProject: true,
+        stage1Project: { select: { id: true, name: true } },
+        suggestedProject: { select: { id: true, name: true } },
+        resolvedProject: { select: { id: true, name: true } },
         task: { select: { id: true, shortId: true, title: true } },
       },
       take: 500,
@@ -306,18 +333,23 @@ export class EmailsService {
       throw new BadRequestException('This triage row is already finalized');
     }
 
+    const includeRelations = {
+      stage1Project: { select: { id: true, name: true } },
+      suggestedProject: { select: { id: true, name: true } },
+      resolvedProject: { select: { id: true, name: true } },
+      task: { select: { id: true, shortId: true, title: true } },
+    };
+
     if (dto.action === 'reject') {
       return this.prisma.emailTriageQueue.update({
         where: { id },
         data: {
           status: EmailTriageQueueStatus.rejected,
+          correctionReason: dto.correction_reason ?? null,
           reviewedByUserId: userId ?? null,
           reviewedAt: new Date(),
         },
-        include: {
-          suggestedProject: true,
-          resolvedProject: true,
-        },
+        include: includeRelations,
       });
     }
 
@@ -331,11 +363,12 @@ export class EmailsService {
       if (!p) throw new BadRequestException('Invalid project');
       return this.prisma.emailTriageQueue.update({
         where: { id },
-        data: { resolvedProjectId: p.id },
-        include: {
-          suggestedProject: true,
-          resolvedProject: true,
+        data: {
+          resolvedProjectId: p.id,
+          correctionReason: dto.correction_reason ?? undefined,
+          status: EmailTriageQueueStatus.pending_review,
         },
+        include: includeRelations,
       });
     }
 
@@ -343,7 +376,8 @@ export class EmailsService {
     const projectId =
       dto.resolved_project_id ||
       row.resolvedProjectId ||
-      row.suggestedProjectId;
+      row.suggestedProjectId ||
+      row.stage1ProjectId;
     if (!projectId) {
       throw new BadRequestException(
         'No project: set resolved project or ensure LLM/suggestion exists',
@@ -394,14 +428,11 @@ export class EmailsService {
           status: EmailTriageQueueStatus.approved,
           taskId: task.id,
           resolvedProjectId: projectId,
+          correctionReason: dto.correction_reason ?? undefined,
           reviewedByUserId: userId ?? null,
           reviewedAt: new Date(),
         },
-        include: {
-          suggestedProject: true,
-          resolvedProject: true,
-          task: { select: { id: true, shortId: true, title: true } },
-        },
+        include: includeRelations,
       });
     });
   }
@@ -519,6 +550,63 @@ export class EmailsService {
         keywords: [...new Set(keywords)],
       };
     });
+  }
+
+  /**
+   * Full context for Sophon Stage 2: projects + KB summaries + rules + recent corrections.
+   * Designed to be included in the OpenAI prompt for better classification.
+   */
+  async getTriageContext() {
+    const [projects, rules, recentCorrections] = await Promise.all([
+      this.prisma.project.findMany({
+        select: {
+          id: true,
+          name: true,
+          description: true,
+          knowledgeBase: true,
+          contacts: {
+            select: { name: true, email: true, company: true },
+            take: 10,
+          },
+        },
+        orderBy: { priority: 'desc' },
+      }),
+      this.prisma.triageRoutingRule.findMany({
+        where: { enabled: true },
+        orderBy: { priority: 'asc' },
+        select: { kind: true, pattern: true, projectId: true, name: true },
+      }),
+      this.prisma.emailTriageQueue.findMany({
+        where: {
+          correctionReason: { not: null },
+          status: { in: ['approved', 'rejected'] },
+        },
+        orderBy: { reviewedAt: 'desc' },
+        take: 30,
+        select: {
+          fromEmail: true,
+          subject: true,
+          stage1Classification: true,
+          suggestedProjectId: true,
+          resolvedProjectId: true,
+          correctionReason: true,
+          resolvedProject: { select: { id: true, name: true } },
+          suggestedProject: { select: { id: true, name: true } },
+        },
+      }),
+    ]);
+
+    return {
+      projects: projects.map((p) => ({
+        id: p.id,
+        name: p.name,
+        description: p.description,
+        kbSummary: p.knowledgeBase?.slice(0, 1500) ?? null,
+        contacts: p.contacts,
+      })),
+      rules,
+      recentCorrections,
+    };
   }
 
   /** Flat list for Sophon / imap script — same order as server-side intake. */

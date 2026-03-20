@@ -145,6 +145,7 @@ export interface FileRoot {
 
 export type EmailTriageQueueStatus =
   | 'fetched'
+  | 'irrelevant'
   | 'pending_review'
   | 'approved'
   | 'rejected';
@@ -158,13 +159,22 @@ export interface EmailTriageQueueRow {
   subject: string;
   bodyText: string | null;
   receivedAt: string;
+  // Stage 1 (local LLM)
+  stage1Classification: string | null;
+  stage1Model: string | null;
+  stage1Rationale: string | null;
+  stage1ProjectId: string | null;
+  stage1Project: { id: string; name: string } | null;
+  // Stage 2 (OpenAI)
   suggestedProjectId: string | null;
   suggestedProject: { id: string; name: string } | null;
-  resolvedProjectId: string | null;
-  resolvedProject: { id: string; name: string } | null;
-  status: EmailTriageQueueStatus;
   llmModel: string | null;
   llmRationale: string | null;
+  // Human review
+  resolvedProjectId: string | null;
+  resolvedProject: { id: string; name: string } | null;
+  correctionReason: string | null;
+  status: EmailTriageQueueStatus;
   taskId: string | null;
   task: { id: string; shortId: number; title: string } | null;
   reviewedByUserId: string | null;
