@@ -85,7 +85,7 @@ if [ "$BACKEND_ONLY" = false ]; then
       --name taskmanager_frontend_1 \
       --restart unless-stopped \
       --network missioncontrol_net \
-      -p 3010:80 \
+      -p 8080:80 \
       taskmanager_frontend:latest
   ' 2>&1 | tail -1
   green "Frontend konténer fut"

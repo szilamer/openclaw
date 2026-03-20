@@ -35,7 +35,7 @@ docker run -d \
   --name taskmanager_frontend_1 \
   --restart unless-stopped \
   --network missioncontrol_net \
-  -p 3010:80 \
+  -p 8080:80 \
   taskmanager_frontend:latest
 
 echo "=== Restart backend ==="
@@ -59,7 +59,7 @@ done
 
 curl -sf http://127.0.0.1:3000/api/health || { echo "BACKEND FAILED"; exit 1; }
 
-FE_CODE=$(curl -sf -o /dev/null -w "%{http_code}" http://127.0.0.1:3010/ 2>&1 || echo "000")
+FE_CODE=$(curl -sf -o /dev/null -w "%{http_code}" http://127.0.0.1:8080/ 2>&1 || echo "000")
 echo "Frontend HTTP: $FE_CODE"
 [ "$FE_CODE" = "200" ] || { echo "FRONTEND FAILED"; exit 1; }
 
