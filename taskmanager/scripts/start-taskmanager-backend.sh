@@ -9,7 +9,7 @@ docker rm -f taskmanager_backend_1 2>/dev/null || true
 docker run -d \
   --name taskmanager_backend_1 \
   --restart unless-stopped \
-  --network taskmanager_default \
+  --network missioncontrol_net \
   --network-alias backend \
   -p 3000:3000 \
   -v /root/openclaw-mirror:/data/openclaw:ro \

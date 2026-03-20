@@ -50,6 +50,8 @@ services:
 volumes:
   taskmanager_pgdata:
 
+# Ne használj "taskmanager_default" nevet: a VPS-en más stack (romify, sandbox) is
+# rákapcsolódott ugyanerre a hálózatra → Compose v2 elutasítja (címke-ütközés).
 networks:
   taskmanager:
-    name: taskmanager_default
+    name: missioncontrol_net

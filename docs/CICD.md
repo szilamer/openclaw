@@ -8,6 +8,8 @@ A **Mission Control** (`taskmanager/**`) élesítése a **VPS-en** és a **Prism
 
 **Ne** írjuk a felhasználónak külön „neked kell migrálni/deployolni” checklistát, ha az agent ezt megteheti. Kivétel: nincs git/SSH a környezetben → rövid javaslat: GitHub Actions **workflow_dispatch**.
 
+**Docker hálózat (VPS):** a Mission Control stack hálózata a repóban **`missioncontrol_net`** (nem `taskmanager_default`). A régi névre más szolgáltatások is rákapcsolódtak → Compose v2 „incorrect label” hibát dobott; az új név izolálja az MC-t.
+
 Lásd még: `.cursor/rules/taskmanager-agent-access.mdc` (helyi Cursor szabály, ha nincs gitignore alól kivéve).
 
 ## Áttekintés

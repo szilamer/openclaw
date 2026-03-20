@@ -84,7 +84,7 @@ if [ "$BACKEND_ONLY" = false ]; then
     docker run -d \
       --name taskmanager_frontend_1 \
       --restart unless-stopped \
-      --network taskmanager_default \
+      --network missioncontrol_net \
       -p 3010:80 \
       taskmanager_frontend:latest
   ' 2>&1 | tail -1
