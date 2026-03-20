@@ -20,6 +20,7 @@ model User {
   assignedTasks  Task[]           @relation("Assignee")
   comments       TaskComment[]
   agentTokens    AgentToken[]
+  triageReviews  EmailTriageQueue[] @relation("TriageReviewedBy")
 }
 
 model AgentToken {
@@ -52,6 +53,9 @@ model Project {
   tasks       Task[]
   contacts    ProjectContact[]
   subProjects SubProject[]
+  triageSuggestedQueue EmailTriageQueue[] @relation("EmailTriageSuggestedProject")
+  triageResolvedQueue  EmailTriageQueue[] @relation("EmailTriageResolvedProject")
+  triageRoutingRules   TriageRoutingRule[]
 }
 
 model SubProject {
@@ -172,6 +176,7 @@ model Task {
   emailLinks    EmailTaskLink[]
   dependsOn    TaskDependency[] @relation("DependentTask")
   dependedBy   TaskDependency[] @relation("PrerequisiteTask")
+  emailTriageQueue EmailTriageQueue?
 }
 
 model TaskDependency {
@@ -254,6 +259,67 @@ model EmailTaskLink {
 
   @@unique([emailId, taskId])
   @@map("email_task_links")
+}
+
+/// Email downloaded on Sophon; LLM suggestion + human review before task creation.
+enum EmailTriageQueueStatus {
+  fetched
+  pending_review
+  approved
+  rejected
+}
+
+model EmailTriageQueue {
+  id        String   @id @default(uuid())
+  sourceUid String   @unique @map("source_uid")
+  mailbox   String?
+  fromEmail String   @map("from_email")
+  toEmail   String   @map("to_email")
+  subject   String
+  bodyText  String?  @map("body_text") @db.Text
+  receivedAt DateTime @map("received_at")
+
+  suggestedProjectId String? @map("suggested_project_id")
+  suggestedProject   Project? @relation("EmailTriageSuggestedProject", fields: [suggestedProjectId], references: [id], onDelete: SetNull)
+  resolvedProjectId  String? @map("resolved_project_id")
+  resolvedProject    Project? @relation("EmailTriageResolvedProject", fields: [resolvedProjectId], references: [id], onDelete: SetNull)
+
+  status EmailTriageQueueStatus @default(fetched)
+
+  llmModel     String? @map("llm_model")
+  llmRationale String? @map("llm_rationale") @db.Text
+
+  taskId String? @unique @map("task_id")
+  task   Task?   @relation(fields: [taskId], references: [id], onDelete: SetNull)
+
+  reviewedByUserId String? @map("reviewed_by_user_id")
+  reviewedBy       User?   @relation("TriageReviewedBy", fields: [reviewedByUserId], references: [id], onDelete: SetNull)
+  reviewedAt       DateTime? @map("reviewed_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("email_triage_queue")
+}
+
+/// User- or correction-defined routing; applied before contact/keyword heuristics on intake.
+model TriageRoutingRule {
+  id          String   @id @default(uuid())
+  /// sender_email | sender_domain | subject_contains | body_contains | regex_subject
+  kind        String
+  pattern     String
+  projectId   String   @map("project_id")
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  priority    Int      @default(100)
+  enabled     Boolean  @default(true)
+  name        String?
+  createdFromTriageId String? @map("created_from_triage_id")
+  createdByUserId     String? @map("created_by_user_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@index([enabled, priority])
+  @@map("triage_routing_rules")
 }
 
 model AgentAction {

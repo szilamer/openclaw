@@ -1,9 +1,26 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { EmailIntakeDto } from './dto';
-import { TaskSourceType } from '@prisma/client';
+import {
+  EmailIntakeDto,
+  TriageRegisterDto,
+  TriageReviewDto,
+  TriageRuleCreateDto,
+  TriageRulePatchDto,
+} from './dto';
+import { EmailTriageQueueStatus, TaskSourceType } from '@prisma/client';
 
-const DEFAULT_PROJECT_NAME = 'Logframe Adminisztráció';
+const TRIAGE_RULE_KINDS = new Set([
+  'sender_email',
+  'sender_domain',
+  'subject_contains',
+  'body_contains',
+  'regex_subject',
+]);
 
 @Injectable()
 export class EmailsService {
@@ -11,12 +28,69 @@ export class EmailsService {
 
   constructor(private prisma: PrismaService) {}
 
+  private extractEmail(fromField: string): string | null {
+    const match =
+      fromField.match(/<([^>]+)>/) || fromField.match(/([\w.+-]+@[\w.-]+)/);
+    return match ? match[1].toLowerCase() : null;
+  }
+
+  private matchTriageRule(
+    kind: string,
+    pattern: string,
+    dto: Pick<EmailIntakeDto, 'from' | 'subject' | 'body'>,
+  ): boolean {
+    const sender = this.extractEmail(dto.from)?.toLowerCase() || '';
+    const domain = sender.split('@')[1] || '';
+    const subj = (dto.subject || '').toLowerCase();
+    const body = (dto.body || '').toLowerCase();
+    const pLower = pattern.toLowerCase();
+
+    switch (kind) {
+      case 'sender_email':
+        return sender === pLower;
+      case 'sender_domain':
+        return domain === pLower;
+      case 'subject_contains':
+        return subj.includes(pLower);
+      case 'body_contains':
+        return body.includes(pLower);
+      case 'regex_subject':
+        try {
+          return new RegExp(pattern, 'i').test(dto.subject || '');
+        } catch {
+          return false;
+        }
+      default:
+        return false;
+    }
+  }
+
+  /** Highest priority = lowest priority number; first match wins. */
+  private async applyTriageRules(
+    dto: EmailIntakeDto,
+  ): Promise<string | null> {
+    const rules = await this.prisma.triageRoutingRule.findMany({
+      where: { enabled: true },
+      orderBy: { priority: 'asc' },
+    });
+    for (const r of rules) {
+      if (this.matchTriageRule(r.kind, r.pattern, dto)) {
+        this.logger.log(
+          `Triage rule "${r.name || r.id}" (${r.kind}) → project ${r.projectId}`,
+        );
+        return r.projectId;
+      }
+    }
+    return null;
+  }
+
   /**
    * Resolve the best-matching project for an email based on:
    * 1. Explicit projectId in the DTO
-   * 2. Sender email domain/address matched against ProjectContact.email
-   * 3. Keyword matching in subject/body against project names
-   * 4. Fallback to "Logframe Adminisztráció"
+   * 2. User-defined triage routing rules (Mission Control)
+   * 3. Sender email domain/address matched against ProjectContact.email
+   * 4. Keyword matching in subject/body against project names
+   * 5. Fallback to "Logframe Adminisztráció"
    */
   private async resolveProject(dto: EmailIntakeDto): Promise<string | null> {
     if (dto.projectId) {
@@ -26,10 +100,12 @@ export class EmailsService {
       if (explicit) return explicit.id;
     }
 
+    const ruleHit = await this.applyTriageRules(dto);
+    if (ruleHit) return ruleHit;
+
     const senderEmail = this.extractEmail(dto.from);
     const senderDomain = senderEmail?.split('@')[1]?.toLowerCase();
 
-    // Match sender email against project contacts
     if (senderEmail) {
       const contactMatch = await this.prisma.projectContact.findFirst({
         where: {
@@ -37,7 +113,14 @@ export class EmailsService {
           OR: [
             { email: { equals: senderEmail, mode: 'insensitive' } },
             ...(senderDomain
-              ? [{ email: { endsWith: `@${senderDomain}`, mode: 'insensitive' as const } }]
+              ? [
+                  {
+                    email: {
+                      endsWith: `@${senderDomain}`,
+                      mode: 'insensitive' as const,
+                    },
+                  },
+                ]
               : []),
           ],
         },
@@ -51,7 +134,6 @@ export class EmailsService {
       }
     }
 
-    // Keyword matching: check if subject/body contains project-related terms
     const haystack =
       `${dto.from} ${dto.subject} ${dto.body || ''}`.toLowerCase();
     const projects = await this.prisma.project.findMany({
@@ -71,8 +153,8 @@ export class EmailsService {
       for (const c of p.contacts) {
         if (c.company) keywords.push(c.company.toLowerCase());
         if (c.email) {
-          const domain = c.email.split('@')[1];
-          if (domain) keywords.push(domain.toLowerCase());
+          const d = c.email.split('@')[1];
+          if (d) keywords.push(d.toLowerCase());
         }
       }
       if (keywords.length > 0) KEYWORD_MAP[p.id] = keywords;
@@ -99,16 +181,10 @@ export class EmailsService {
       return bestId;
     }
 
-    // Fallback
     const fallback = projects.find((p) =>
       p.name.toLowerCase().includes('logframe admin'),
     );
     return fallback?.id || projects[0]?.id || null;
-  }
-
-  private extractEmail(fromField: string): string | null {
-    const match = fromField.match(/<([^>]+)>/) || fromField.match(/([\w.+-]+@[\w.-]+)/);
-    return match ? match[1].toLowerCase() : null;
   }
 
   async intake(dto: EmailIntakeDto) {
@@ -125,7 +201,7 @@ export class EmailsService {
       },
     });
 
-    const tasks: any[] = [];
+    const tasks: unknown[] = [];
     if (dto.auto_create_task) {
       const projectId = await this.resolveProject(dto);
       if (projectId) {
@@ -146,6 +222,256 @@ export class EmailsService {
     }
 
     return { email, tasks };
+  }
+
+  /**
+   * Sophon pipeline: store downloaded email + optional OpenAI classification.
+   * Does not create a task until the user approves in Mission Control.
+   */
+  async registerTriage(dto: TriageRegisterDto) {
+    let suggestedProjectId: string | null = null;
+    if (dto.suggested_project_id) {
+      const p = await this.prisma.project.findUnique({
+        where: { id: dto.suggested_project_id },
+      });
+      if (p) suggestedProjectId = p.id;
+    }
+
+    const status = suggestedProjectId
+      ? EmailTriageQueueStatus.pending_review
+      : EmailTriageQueueStatus.fetched;
+
+    const row = await this.prisma.emailTriageQueue.upsert({
+      where: { sourceUid: dto.source_uid },
+      create: {
+        sourceUid: dto.source_uid,
+        mailbox: dto.mailbox ?? null,
+        fromEmail: dto.from,
+        toEmail: dto.to,
+        subject: dto.subject,
+        bodyText: dto.body ?? null,
+        receivedAt: new Date(dto.date),
+        suggestedProjectId,
+        llmModel: dto.llm_model ?? null,
+        llmRationale: dto.llm_rationale ?? null,
+        status,
+      },
+      update: {
+        mailbox: dto.mailbox ?? undefined,
+        fromEmail: dto.from,
+        toEmail: dto.to,
+        subject: dto.subject,
+        bodyText: dto.body ?? undefined,
+        receivedAt: new Date(dto.date),
+        ...(suggestedProjectId
+          ? {
+              suggestedProjectId,
+              llmModel: dto.llm_model ?? null,
+              llmRationale: dto.llm_rationale ?? null,
+              status: EmailTriageQueueStatus.pending_review,
+            }
+          : {}),
+      },
+      include: {
+        suggestedProject: true,
+        resolvedProject: true,
+      },
+    });
+
+    return row;
+  }
+
+  async listTriageQueue(status?: EmailTriageQueueStatus) {
+    return this.prisma.emailTriageQueue.findMany({
+      where: status ? { status } : undefined,
+      orderBy: { receivedAt: 'desc' },
+      include: {
+        suggestedProject: true,
+        resolvedProject: true,
+        task: { select: { id: true, shortId: true, title: true } },
+      },
+      take: 500,
+    });
+  }
+
+  async reviewTriage(id: string, dto: TriageReviewDto, userId?: string | null) {
+    const row = await this.prisma.emailTriageQueue.findUnique({
+      where: { id },
+    });
+    if (!row) throw new NotFoundException('Triage row not found');
+    if (
+      row.status === EmailTriageQueueStatus.approved ||
+      row.status === EmailTriageQueueStatus.rejected
+    ) {
+      throw new BadRequestException('This triage row is already finalized');
+    }
+
+    if (dto.action === 'reject') {
+      return this.prisma.emailTriageQueue.update({
+        where: { id },
+        data: {
+          status: EmailTriageQueueStatus.rejected,
+          reviewedByUserId: userId ?? null,
+          reviewedAt: new Date(),
+        },
+        include: {
+          suggestedProject: true,
+          resolvedProject: true,
+        },
+      });
+    }
+
+    if (dto.action === 'set_project') {
+      if (!dto.resolved_project_id) {
+        throw new BadRequestException('resolved_project_id required');
+      }
+      const p = await this.prisma.project.findUnique({
+        where: { id: dto.resolved_project_id },
+      });
+      if (!p) throw new BadRequestException('Invalid project');
+      return this.prisma.emailTriageQueue.update({
+        where: { id },
+        data: { resolvedProjectId: p.id },
+        include: {
+          suggestedProject: true,
+          resolvedProject: true,
+        },
+      });
+    }
+
+    // approve
+    const projectId =
+      dto.resolved_project_id ||
+      row.resolvedProjectId ||
+      row.suggestedProjectId;
+    if (!projectId) {
+      throw new BadRequestException(
+        'No project: set resolved project or ensure LLM/suggestion exists',
+      );
+    }
+    const project = await this.prisma.project.findUnique({
+      where: { id: projectId },
+    });
+    if (!project) throw new BadRequestException('Invalid project');
+
+    return this.prisma.$transaction(async (tx) => {
+      const email = await tx.emailMessage.upsert({
+        where: { sourceUid: row.sourceUid },
+        update: {
+          from: row.fromEmail,
+          to: row.toEmail,
+          subject: row.subject,
+          date: row.receivedAt,
+          body: row.bodyText,
+        },
+        create: {
+          from: row.fromEmail,
+          to: row.toEmail,
+          subject: row.subject,
+          date: row.receivedAt,
+          body: row.bodyText,
+          sourceUid: row.sourceUid,
+        },
+      });
+
+      const task = await tx.task.create({
+        data: {
+          projectId,
+          title: row.subject,
+          description: row.bodyText?.slice(0, 2000) ?? undefined,
+          sourceType: TaskSourceType.email,
+          sourceRef: row.sourceUid,
+        },
+      });
+
+      await tx.emailTaskLink.create({
+        data: { emailId: email.id, taskId: task.id },
+      });
+
+      return tx.emailTriageQueue.update({
+        where: { id },
+        data: {
+          status: EmailTriageQueueStatus.approved,
+          taskId: task.id,
+          resolvedProjectId: projectId,
+          reviewedByUserId: userId ?? null,
+          reviewedAt: new Date(),
+        },
+        include: {
+          suggestedProject: true,
+          resolvedProject: true,
+          task: { select: { id: true, shortId: true, title: true } },
+        },
+      });
+    });
+  }
+
+  async listTriageRules() {
+    return this.prisma.triageRoutingRule.findMany({
+      orderBy: [{ priority: 'asc' }, { createdAt: 'desc' }],
+      include: { project: { select: { id: true, name: true } } },
+    });
+  }
+
+  async createTriageRule(dto: TriageRuleCreateDto, userId?: string | null) {
+    if (!TRIAGE_RULE_KINDS.has(dto.kind)) {
+      throw new BadRequestException(
+        `Invalid kind. Use: ${[...TRIAGE_RULE_KINDS].join(', ')}`,
+      );
+    }
+    const p = await this.prisma.project.findUnique({
+      where: { id: dto.project_id },
+    });
+    if (!p) throw new BadRequestException('Invalid project_id');
+
+    return this.prisma.triageRoutingRule.create({
+      data: {
+        kind: dto.kind,
+        pattern: dto.pattern,
+        projectId: dto.project_id,
+        priority: dto.priority ?? 100,
+        name: dto.name ?? null,
+        createdFromTriageId: dto.created_from_triage_id ?? null,
+        createdByUserId: userId ?? null,
+      },
+      include: { project: { select: { id: true, name: true } } },
+    });
+  }
+
+  async patchTriageRule(id: string, dto: TriageRulePatchDto) {
+    const existing = await this.prisma.triageRoutingRule.findUnique({
+      where: { id },
+    });
+    if (!existing) throw new NotFoundException('Rule not found');
+    if (dto.kind && !TRIAGE_RULE_KINDS.has(dto.kind)) {
+      throw new BadRequestException(
+        `Invalid kind. Use: ${[...TRIAGE_RULE_KINDS].join(', ')}`,
+      );
+    }
+    if (dto.project_id) {
+      const p = await this.prisma.project.findUnique({
+        where: { id: dto.project_id },
+      });
+      if (!p) throw new BadRequestException('Invalid project_id');
+    }
+
+    return this.prisma.triageRoutingRule.update({
+      where: { id },
+      data: {
+        kind: dto.kind ?? undefined,
+        pattern: dto.pattern ?? undefined,
+        projectId: dto.project_id ?? undefined,
+        priority: dto.priority ?? undefined,
+        enabled: dto.enabled ?? undefined,
+        name: dto.name ?? undefined,
+      },
+      include: { project: { select: { id: true, name: true } } },
+    });
+  }
+
+  async deleteTriageRule(id: string) {
+    await this.prisma.triageRoutingRule.delete({ where: { id } });
+    return { ok: true };
   }
 
   /**
@@ -172,9 +498,7 @@ export class EmailsService {
         .filter(Boolean) as string[];
       const contactDomains = [
         ...new Set(
-          contactEmails
-            .map((e) => e.split('@')[1])
-            .filter(Boolean),
+          contactEmails.map((e) => e.split('@')[1]).filter(Boolean),
         ),
       ];
       const keywords = p.name
@@ -194,6 +518,22 @@ export class EmailsService {
         contactDomains,
         keywords: [...new Set(keywords)],
       };
+    });
+  }
+
+  /** Flat list for Sophon / imap script — same order as server-side intake. */
+  async getTriageRulesForAgent() {
+    return this.prisma.triageRoutingRule.findMany({
+      where: { enabled: true },
+      orderBy: { priority: 'asc' },
+      select: {
+        id: true,
+        kind: true,
+        pattern: true,
+        projectId: true,
+        priority: true,
+        name: true,
+      },
     });
   }
 }

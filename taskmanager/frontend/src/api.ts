@@ -39,6 +39,11 @@ async function fetchApi<T>(
   });
 
   if (!res.ok) {
+    if (res.status === 401) {
+      clearToken();
+      window.location.reload();
+      throw new Error('Érvénytelen token — újra bejelentkezés szükséges');
+    }
     const text = await res.text();
     throw new Error(text || `HTTP ${res.status}`);
   }
@@ -273,6 +278,54 @@ export const api = {
         body: JSON.stringify(data),
       }),
   },
+  emails: {
+    triageQueue: (status?: string) => {
+      const q = status ? `?status=${encodeURIComponent(status)}` : '';
+      return fetchApi<EmailTriageQueueRow[]>(`/api/emails/triage/queue${q}`);
+    },
+    triageReview: (
+      id: string,
+      body: { action: 'approve' | 'reject' | 'set_project'; resolved_project_id?: string },
+    ) =>
+      fetchApi<EmailTriageQueueRow>(`/api/emails/triage/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      }),
+    triageRules: {
+      list: () => fetchApi<TriageRoutingRule[]>(`/api/emails/triage/rules`),
+      create: (data: {
+        kind: string;
+        pattern: string;
+        project_id: string;
+        priority?: number;
+        name?: string;
+        created_from_triage_id?: string;
+      }) =>
+        fetchApi<TriageRoutingRule>(`/api/emails/triage/rules`, {
+          method: 'POST',
+          body: JSON.stringify(data),
+        }),
+      patch: (
+        id: string,
+        data: Partial<{
+          kind: string;
+          pattern: string;
+          project_id: string;
+          priority: number;
+          enabled: boolean;
+          name: string;
+        }>,
+      ) =>
+        fetchApi<TriageRoutingRule>(`/api/emails/triage/rules/${id}`, {
+          method: 'PATCH',
+          body: JSON.stringify(data),
+        }),
+      delete: (id: string) =>
+        fetchApi<{ ok: boolean }>(`/api/emails/triage/rules/${id}`, {
+          method: 'DELETE',
+        }),
+    },
+  },
   agents: {
     list: () => fetchApi<any>('/api/agents'),
     activity: (id: string, limit = 30) =>
@@ -327,4 +380,14 @@ export const api = {
   },
 };
 
-import type { Project, Task, FileRoot, ProjectContact, ProjectMember, KbSyncStatus, SubProject } from './types';
+import type {
+  Project,
+  Task,
+  FileRoot,
+  ProjectContact,
+  ProjectMember,
+  KbSyncStatus,
+  SubProject,
+  EmailTriageQueueRow,
+  TriageRoutingRule,
+} from './types';

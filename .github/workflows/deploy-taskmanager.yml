@@ -86,7 +86,7 @@ jobs:
             sleep 8
 
             echo "=== Running migrations ==="
-            docker compose exec -T backend npx prisma migrate deploy 2>/dev/null || true
+            docker compose exec -T backend npx prisma migrate deploy
 
             echo "=== Health check ==="
             for i in 1 2 3 4 5; do

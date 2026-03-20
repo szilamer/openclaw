@@ -11,6 +11,7 @@ import { AgentsDashboard } from './components/AgentsDashboard';
 import { GanttView } from './components/GanttView';
 import { ScheduleCalendar } from './components/ScheduleCalendar';
 import { Reports } from './components/Reports';
+import { EmailTriage } from './components/EmailTriage';
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const token = getToken();
@@ -33,6 +34,7 @@ export default function App() {
         <Route path="/agents" element={<RequireAuth><AgentsDashboard /></RequireAuth>} />
         <Route path="/schedule" element={<RequireAuth><ScheduleCalendar /></RequireAuth>} />
         <Route path="/reports" element={<RequireAuth><Reports /></RequireAuth>} />
+        <Route path="/email-triage" element={<RequireAuth><EmailTriage /></RequireAuth>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>

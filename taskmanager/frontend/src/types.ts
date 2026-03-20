@@ -142,3 +142,48 @@ export interface FileRoot {
   basePath: string;
   children: FileNode[];
 }
+
+export type EmailTriageQueueStatus =
+  | 'fetched'
+  | 'pending_review'
+  | 'approved'
+  | 'rejected';
+
+export interface EmailTriageQueueRow {
+  id: string;
+  sourceUid: string;
+  mailbox: string | null;
+  fromEmail: string;
+  toEmail: string;
+  subject: string;
+  bodyText: string | null;
+  receivedAt: string;
+  suggestedProjectId: string | null;
+  suggestedProject: { id: string; name: string } | null;
+  resolvedProjectId: string | null;
+  resolvedProject: { id: string; name: string } | null;
+  status: EmailTriageQueueStatus;
+  llmModel: string | null;
+  llmRationale: string | null;
+  taskId: string | null;
+  task: { id: string; shortId: number; title: string } | null;
+  reviewedByUserId: string | null;
+  reviewedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TriageRoutingRule {
+  id: string;
+  kind: string;
+  pattern: string;
+  projectId: string;
+  priority: number;
+  enabled: boolean;
+  name: string | null;
+  createdFromTriageId: string | null;
+  createdByUserId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  project: { id: string; name: string };
+}

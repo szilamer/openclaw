@@ -2,6 +2,14 @@
 
 > Utolsó frissítés: 2026-03-18
 
+## Cursor agent — deploy és migráció (ne a felhasználó kapja feladatként)
+
+A **Mission Control** (`taskmanager/**`) élesítése a **VPS-en** és a **Prisma `migrate deploy`** az **agent feladata**: commit + push `main` (GitHub Actions), vagy `cd taskmanager && ./scripts/deploy.sh`, ha van SSH.
+
+**Ne** írjuk a felhasználónak külön „neked kell migrálni/deployolni” checklistát, ha az agent ezt megteheti. Kivétel: nincs git/SSH a környezetben → rövid javaslat: GitHub Actions **workflow_dispatch**.
+
+Lásd még: `.cursor/rules/taskmanager-agent-access.mdc` (helyi Cursor szabály, ha nincs gitignore alól kivéve).
+
 ## Áttekintés
 
 A Mission Control fejlesztése helyi gépen történik. A deploy két úton lehetséges:
