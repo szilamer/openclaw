@@ -5,18 +5,18 @@ Ez a dokumentum leírja a kétlépcsős email triage folyamatot, amit az email c
 ## Folyamat áttekintése
 
 ```
-IMAP fetch + Ollama (Stage 1) → Sophon review (Stage 2) → MC register → mark-seen
+IMAP fetch + Qwen 2.5:14b lokális (Stage 1) → Sophon review (Stage 2) → MC register → mark-seen
 ```
 
 ## Lépések
 
-### 1. Email-ek letöltése + Stage 1 osztályozás (Ollama)
+### 1. Email-ek letöltése + Stage 1 osztályozás (Qwen lokális LLM)
 
 ```bash
 exec node skills/imap-smtp-email/scripts/imap.js triage --limit 30
 ```
 
-Ez letölti az UNSEEN emaileket teljes szöveggel és minden emailre Ollama (llama3.2:3b) segítségével elvégzi az első osztályozást:
+Ez letölti az UNSEEN emaileket teljes szöveggel és minden emailre a lokális Qwen 2.5:14b modell (Ollama API-n) segítségével elvégzi az első osztályozást:
 - `irrelevant` — spam, hírlevél, automatikus értesítés, reklám
 - `relevant_unknown` — üzleti email de nem egyértelmű a projekt
 - `classified` — besorolható egy konkrét projektbe (project_id mellékelve)
@@ -91,7 +91,7 @@ exec node skills/imap-smtp-email/scripts/imap.js mark-seen <uid1> <uid2> <uid3> 
 
 - **Ne hozz létre Task-ot** — a felhasználó jóváhagyja Mission Controlban, az generálja a task-ot
 - **Tanulj a korrekciókból** — a `recentCorrections` mező tartalmazza a felhasználó korábbi javításait indoklással; vedd figyelembe ezeket a Stage 2 döntéseidnél
-- **Body csonkolás** — ha az email body > 10000 karakter, csonkold a register hívásban (az Ollama prompt max 3000 karaktert kap)
+- **Body csonkolás** — ha az email body > 10000 karakter, csonkold a register hívásban (a Qwen prompt max 3000 karaktert kap)
 - **Hiba esetén** — ha egy email regisztrálása sikertelen, folytasd a következővel; ne állj le
 - **Live status** — ha TASK_ID elérhető, jelezd a haladást:
   ```bash

@@ -281,7 +281,7 @@ model EmailTriageQueue {
   bodyText  String?  @map("body_text") @db.Text
   receivedAt DateTime @map("received_at")
 
-  // Stage 1 — local LLM (Ollama)
+  // Stage 1 — local LLM (Qwen 2.5:14b via Ollama)
   stage1Classification String?  @map("stage1_classification") // irrelevant | relevant_unknown | classified
   stage1Model          String?  @map("stage1_model")
   stage1Rationale      String?  @map("stage1_rationale") @db.Text

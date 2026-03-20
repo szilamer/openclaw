@@ -178,7 +178,7 @@ export function EmailTriage() {
               Email triage
             </h1>
             <p className="text-slate-400 text-sm mt-1">
-              Kétlépcsős LLM osztályozás (Ollama + OpenAI) → felhasználói felülbírálat → tanuló szabályok
+              Kétlépcsős LLM osztályozás (Qwen lokális + Sophon OpenAI) → felülbírálat → tanuló szabályok
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -342,7 +342,7 @@ export function EmailTriage() {
                         <div className="bg-slate-950 px-4 py-2">
                           <div className="text-xs text-slate-500 mb-1 flex items-center gap-1.5">
                             <span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-500" />
-                            Stage 1 — {row.stage1Model || 'Ollama'}
+                            Stage 1 — {row.stage1Model || 'Qwen (lokális)'}
                           </div>
                           {row.stage1Classification ? (
                             <>
@@ -369,7 +369,7 @@ export function EmailTriage() {
                         <div className="bg-slate-950 px-4 py-2">
                           <div className="text-xs text-slate-500 mb-1 flex items-center gap-1.5">
                             <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                            Stage 2 — {row.llmModel || 'OpenAI'}
+                            Stage 2 — {row.llmModel || 'Sophon'}
                           </div>
                           {row.suggestedProject ? (
                             <>

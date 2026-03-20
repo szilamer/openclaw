@@ -77,7 +77,7 @@ export class TriageRegisterDto {
   @IsString()
   body?: string;
 
-  // Stage 1 — local LLM (Ollama)
+  // Stage 1 — local LLM (Qwen 2.5:14b via Ollama)
   @ApiPropertyOptional({ description: 'irrelevant | relevant_unknown | classified' })
   @IsOptional()
   @IsString()

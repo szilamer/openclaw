@@ -4,21 +4,21 @@
 
 ```
 IMAP (Mac Mini)
-  → Stage 1: Ollama (llama3.2:3b) — gyors osztályozás
-  → Stage 2: Sophon/OpenAI — KB + korrekciók kontextusával review
+  → Stage 1: Qwen 2.5:14b (lokális LLM, Ollama API) — konkrét projektbe sorolás
+  → Stage 2: Sophon (openai-codex/gpt-5.3-codex) — KB + korrekciók kontextusával review
   → Mission Control: regisztráció
   → Felhasználó: jóváhagyás/felülírás + indoklás (tanulás)
   → Task létrehozás (jóváhagyáskor)
 ```
 
-### Stage 1 — Ollama (helyi LLM)
+### Stage 1 — Qwen 2.5:14b (helyi LLM)
 
-A `imap.js triage` parancs minden UNSEEN emailre:
+A `imap.js triage` parancs (vagy `email_llm_triage.js`) minden UNSEEN emailre:
 1. Letölti a teljes email szöveget IMAP-on
-2. Ollama-nak küldi osztályozásra (`http://localhost:11434/api/generate`)
-3. Eredmény: `irrelevant` | `relevant_unknown` | `classified` + indoklás + projekt ID
+2. Qwen 2.5:14b-nek küldi osztályozásra az Ollama API-n (`http://localhost:11434/api/generate`)
+3. Eredmény: `irrelevant` | `relevant_unknown` | `classified` + indoklás + konkrét projekt ID
 
-### Stage 2 — Sophon (OpenAI)
+### Stage 2 — Sophon (openai-codex/gpt-5.3-codex)
 
 A Sophon agent (cron job) áttekinti az összes emailt a nagyobb kontextusablakával:
 - Projekt KB fájlok (`memory/projects/*.md`)
@@ -62,7 +62,7 @@ A felhasználó (`/email-triage`) látja:
   "date": "2026-03-20T10:00:00Z",
   "body": "Teljes email szöveg...",
   "stage1_classification": "classified",
-  "stage1_model": "llama3.2:3b",
+  "stage1_model": "qwen2.5:14b",
   "stage1_rationale": "Küldő domain egyezik a projekttel",
   "stage1_project_id": "uuid-or-null",
   "suggested_project_id": "uuid-or-null",
@@ -98,10 +98,10 @@ A felhasználó (`/email-triage`) látja:
 | Mező | Típus | Leírás |
 |------|-------|--------|
 | `stage1_classification` | text | Stage 1: irrelevant / relevant_unknown / classified |
-| `stage1_model` | text | Stage 1 modell neve (pl. llama3.2:3b) |
+| `stage1_model` | text | Stage 1 modell neve (pl. qwen2.5:14b) |
 | `stage1_rationale` | text | Stage 1 indoklás |
 | `stage1_project_id` | uuid FK | Stage 1 projekt javaslat |
-| `llm_model` | text | Stage 2 modell neve (pl. gpt-5.3-codex) |
+| `llm_model` | text | Stage 2 modell neve (pl. openai-codex/gpt-5.3-codex) |
 | `llm_rationale` | text | Stage 2 indoklás |
 | `suggested_project_id` | uuid FK | Stage 2 projekt javaslat |
 | `resolved_project_id` | uuid FK | Felhasználó végső döntése |
@@ -121,7 +121,7 @@ Determinisztikus szabályok: `sender_email`, `sender_domain`, `subject_contains`
 ## imap.js parancsok
 
 ```bash
-node imap.js triage [--limit N]           # UNSEEN emailek + Ollama Stage 1
+node imap.js triage [--limit N]           # UNSEEN emailek + Qwen Stage 1
 node imap.js mark-seen <uid1> [uid2 ...]  # \Seen flag beállítása
 node imap.js check [--limit N]            # UNSEEN UID-k listája (nem triage)
 node imap.js fetch <uid>                  # Teljes levél JSON
@@ -132,7 +132,7 @@ node imap.js intake <uid> [opts]          # Legacy: közvetlen task létrehozás
 
 ```
 OLLAMA_URL=http://localhost:11434
-OLLAMA_MODEL=llama3.2:3b
+OLLAMA_MODEL=qwen2.5:14b
 TASKMANAGER_BASE_URL=https://sp.logframe.cc/api
 TASKMANAGER_AGENT_TOKEN=...
 ```
