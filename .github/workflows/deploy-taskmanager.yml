@@ -19,14 +19,14 @@ env:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: npm
@@ -48,59 +48,85 @@ jobs:
       - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 700 ~/.ssh
+          # Secret lehet többsoros PEM vagy escaped \n — mindkettőt kezeljük
+          printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" | sed 's/\\n/\n/g' > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null || true
 
       - name: Sync source to VPS
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
         run: |
+          set -euo pipefail
+          test -n "${VPS_HOST:-}" || { echo "VPS_HOST secret missing"; exit 1; }
           rsync -avz --delete \
-            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no" \
+            -e "ssh -i $HOME/.ssh/deploy_key -o StrictHostKeyChecking=no -o IdentitiesOnly=yes" \
             --exclude node_modules \
             --exclude '.env' \
             --exclude '.git' \
             --exclude '*.tsbuildinfo' \
-            taskmanager/ root@${{ secrets.VPS_HOST }}:${{ env.DEPLOY_DIR }}/
+            taskmanager/ "root@${VPS_HOST}:${DEPLOY_DIR}/"
 
       - name: Deploy on VPS
-        uses: appleboy/ssh-action@v1.2.0
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.VPS_HOST }}
           username: root
           key: ${{ secrets.VPS_SSH_KEY }}
-          command_timeout: 10m
+          command_timeout: 25m
+          script_stop: true
           script: |
-            set -e
+            set -euo pipefail
             cd /root/taskmanager
 
-            echo "=== Building Docker images ==="
-            docker compose build --no-cache backend frontend
+            echo "=== Building Docker images (layer cache OK) ==="
+            docker compose build backend frontend
 
-            echo "=== Stopping old containers ==="
-            docker compose stop backend frontend
+            echo "=== Recreating containers ==="
+            docker compose up -d --force-recreate backend frontend
 
-            echo "=== Starting updated containers ==="
-            docker compose up -d
+            echo "=== Waiting for Postgres ==="
+            for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+              if docker compose exec -T postgres pg_isready -U taskmanager -d taskmanager >/dev/null 2>&1; then
+                echo "Postgres ready"
+                break
+              fi
+              echo "Waiting for postgres... ($i/15)"
+              sleep 2
+            done
 
-            echo "=== Waiting for services ==="
-            sleep 8
+            echo "=== Waiting for backend process ==="
+            sleep 5
 
             echo "=== Running migrations ==="
             docker compose exec -T backend npx prisma migrate deploy
 
-            echo "=== Health check ==="
-            for i in 1 2 3 4 5; do
-              if curl -sf http://localhost:3000/api/health > /dev/null 2>&1; then
+            echo "=== Health check (backend) ==="
+            BACKEND_OK=0
+            for i in 1 2 3 4 5 6 7 8 9 10; do
+              if curl -sf http://127.0.0.1:3000/api/health >/dev/null 2>&1; then
                 echo "Backend OK"
+                BACKEND_OK=1
                 break
               fi
-              echo "Waiting for backend... ($i/5)"
+              echo "Waiting for backend... ($i/10)"
               sleep 3
             done
+            if [ "$BACKEND_OK" != "1" ]; then
+              echo "Backend health check failed"
+              docker compose logs backend --tail 80 || true
+              exit 1
+            fi
 
-            curl -sf -o /dev/null http://localhost:8080/ && echo "Frontend OK" || echo "Frontend check failed"
+            echo "=== Health check (frontend) ==="
+            curl -sf -o /dev/null http://127.0.0.1:8080/ && echo "Frontend OK" || {
+              echo "Frontend check failed"
+              docker compose logs frontend --tail 40 || true
+              exit 1
+            }
 
-            echo "=== Cleaning old images ==="
+            echo "=== Cleaning dangling images ==="
             docker image prune -f > /dev/null 2>&1 || true
 
             echo "=== Deploy complete ==="
