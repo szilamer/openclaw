@@ -1,8 +1,10 @@
-# Email Triage Pipeline — Sophon instrukciók
+# Email Triage — egyben futtatva (legacy / manuális)
 
-Ez a dokumentum leírja a kétlépcsős email triage folyamatot, amit az email cron job során kell végrehajtani.
+**Ajánlott éles üzem:** két külön cron — lásd `docs/EMAIL_TRIAGE_CRON_ARCHITECTURE.md`, Stage 1: `skills/imap-smtp-email/scripts/email-triage-stage1-hourly.sh`, Stage 2: `config/agents/email-triage-stage2-sophon.md`.
 
-## Folyamat áttekintése
+Az alábbi lépések **egy** Sophon-futásban is végrehajthatók (pl. teszt), ha egyszerre akarsz Stage 1 + 2 + register.
+
+## Folyamat áttekintése (all-in-one)
 
 ```
 IMAP fetch + Qwen 2.5:14b lokális (Stage 1) → Sophon review (Stage 2) → MC register → mark-seen

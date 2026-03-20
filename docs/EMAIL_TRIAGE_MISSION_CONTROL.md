@@ -4,11 +4,9 @@
 
 ```
 IMAP (Mac Mini)
-  → Stage 1: Qwen 2.5:14b (lokális LLM, Ollama API) — konkrét projektbe sorolás
-  → Stage 2: Sophon (openai-codex/gpt-5.3-codex) — KB + korrekciók kontextusával review
-  → Mission Control: regisztráció
-  → Felhasználó: jóváhagyás/felülírás + indoklás (tanulás)
-  → Task létrehozás (jóváhagyáskor)
+  → Stage 1 (óránként): Qwen — `register` → státusz **`awaiting_sophon`**
+  → Stage 2 (3 óránként): Sophon GPT — `PATCH` **`sophon_resolve`** (task / irrelevant / ember)
+  → Ember: csak **`pending_review`** (GPT bizonytalan)
 ```
 
 ### Stage 1 — Qwen 2.5:14b (helyi LLM)
@@ -43,6 +41,7 @@ A felhasználó (`/email-triage`) látja:
 | `POST` | `/api/emails/triage/register` | Sor felvétele (mindkét stage eredményével) |
 | `GET` | `/api/emails/triage/queue?status=pending_review` | Lista (max 500) |
 | `PATCH` | `/api/emails/triage/:id` | Review: `approve` / `reject` / `set_project` + `correction_reason` |
+| `PATCH` | `/api/emails/triage/:id` | Agent: `action: sophon_resolve` + `sophon_outcome`: `create_task` / `mark_irrelevant` / `needs_human` |
 | `GET` | `/api/emails/triage/context` | Projektek + KB + szabályok + korrekciók (Sophon prompthoz) |
 | `GET` | `/api/emails/triage/rules` | Szabályok (MC UI) |
 | `POST` | `/api/emails/triage/rules` | Új szabály |
@@ -85,11 +84,12 @@ A felhasználó (`/email-triage`) látja:
 
 | Státusz | Jelentés |
 |---------|----------|
-| `fetched` | Email letöltve, nincs LLM osztályozás |
-| `irrelevant` | Mindkét LLM irrelevánsnak ítélte |
-| `pending_review` | LLM besorolta, felhasználói ellenőrzésre vár |
-| `approved` | Jóváhagyva → Task + EmailMessage létrehozva |
-| `rejected` | Elvetve (nem kell task) |
+| `fetched` | Email letöltve, nincs Stage 1 |
+| `awaiting_sophon` | Stage 1 (Qwen) kész, **Sophon GPT cron** még nem döntött |
+| `irrelevant` | Végső: szemét / nincs teendő (GPT vagy ember) |
+| `pending_review` | **GPT bizonytalan** — felhasználó dönt |
+| `approved` | Task + EmailMessage (GPT `create_task` vagy emberi `approve`) |
+| `rejected` | Elvetve |
 
 ## Adatbázis
 

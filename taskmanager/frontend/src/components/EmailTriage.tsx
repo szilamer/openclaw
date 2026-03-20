@@ -10,14 +10,16 @@ import type {
 
 const STATUS_LABELS: Record<EmailTriageQueueStatus, string> = {
   fetched: 'Letöltve',
+  awaiting_sophon: 'GPT-re vár (Sophon)',
   irrelevant: 'Irreleváns',
-  pending_review: 'Ellenőrzésre vár',
+  pending_review: 'Ellenőrzésre vár (ember)',
   approved: 'Jóváhagyva',
   rejected: 'Elvetve',
 };
 
 const STATUS_COLORS: Record<EmailTriageQueueStatus, string> = {
   fetched: 'bg-slate-700 text-slate-300',
+  awaiting_sophon: 'bg-cyan-950/80 text-cyan-200/90',
   irrelevant: 'bg-slate-800 text-slate-500 line-through',
   pending_review: 'bg-amber-900/60 text-amber-200',
   approved: 'bg-emerald-900/60 text-emerald-200',
@@ -168,6 +170,7 @@ export function EmailTriage() {
 
   const irrelevantCount = queue.filter((r) => r.status === 'irrelevant').length;
   const pendingCount = queue.filter((r) => r.status === 'pending_review').length;
+  const awaitingSophonCount = queue.filter((r) => r.status === 'awaiting_sophon').length;
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 p-6 md:p-10">
@@ -178,13 +181,18 @@ export function EmailTriage() {
               Email triage
             </h1>
             <p className="text-slate-400 text-sm mt-1">
-              Kétlépcsős LLM osztályozás (Qwen lokális + Sophon OpenAI) → felülbírálat → tanuló szabályok
+              Óránként Qwen (Stage 1) → 3 óránként Sophon GPT (task vagy ember) → csak bizonytalan esetben te döntesz
             </p>
           </div>
           <div className="flex items-center gap-3">
+            {awaitingSophonCount > 0 && (
+              <span className="px-3 py-1 rounded-full bg-cyan-950/70 text-cyan-200 text-sm font-medium">
+                {awaitingSophonCount} GPT-re vár
+              </span>
+            )}
             {pendingCount > 0 && (
               <span className="px-3 py-1 rounded-full bg-amber-900/50 text-amber-200 text-sm font-medium">
-                {pendingCount} ellenőrzésre vár
+                {pendingCount} neked döntendő
               </span>
             )}
             <button
@@ -271,7 +279,7 @@ export function EmailTriage() {
                     Nincs elem.{' '}
                     {!filter && hideIrrelevant && irrelevantCount > 0
                       ? `${irrelevantCount} irreleváns el van rejtve.`
-                      : 'A Sophon imap.js triage parancsával tölti fel a sort.'}
+                      : 'Az óránkénti Stage 1 script (email-triage-stage1-hourly.sh) tölti fel a sort.'}
                   </div>
                 )}
                 {visibleQueue.map((row) => {
@@ -386,6 +394,10 @@ export function EmailTriage() {
                             <p className="text-xs text-slate-500 line-clamp-2">
                               {row.llmRationale}
                             </p>
+                          ) : row.status === 'awaiting_sophon' ? (
+                            <span className="text-xs text-cyan-600/90">
+                              Vár a Sophon GPT cron futásra (3 óránként)…
+                            </span>
                           ) : (
                             <span className="text-xs text-slate-600">—</span>
                           )}

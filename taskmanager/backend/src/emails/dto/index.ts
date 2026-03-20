@@ -6,6 +6,7 @@ import {
   IsIn,
   IsInt,
   Min,
+  ValidateIf,
 } from 'class-validator';
 
 export class EmailIntakeDto {
@@ -116,9 +117,13 @@ export class TriageRegisterDto {
 }
 
 export class TriageReviewDto {
-  @ApiProperty({ enum: ['approve', 'reject', 'set_project'] })
-  @IsIn(['approve', 'reject', 'set_project'])
-  action: 'approve' | 'reject' | 'set_project';
+  @ApiProperty({
+    enum: ['approve', 'reject', 'set_project', 'sophon_resolve'],
+    description:
+      'sophon_resolve: GPT döntés (csak agent) — create_task | mark_irrelevant | needs_human',
+  })
+  @IsIn(['approve', 'reject', 'set_project', 'sophon_resolve'])
+  action: 'approve' | 'reject' | 'set_project' | 'sophon_resolve';
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -129,6 +134,22 @@ export class TriageReviewDto {
   @IsOptional()
   @IsString()
   correction_reason?: string;
+
+  /** Csak action === sophon_resolve */
+  @ApiPropertyOptional({ enum: ['create_task', 'mark_irrelevant', 'needs_human'] })
+  @ValidateIf((o) => o.action === 'sophon_resolve')
+  @IsIn(['create_task', 'mark_irrelevant', 'needs_human'])
+  sophon_outcome?: 'create_task' | 'mark_irrelevant' | 'needs_human';
+
+  @ApiPropertyOptional({ description: 'Sophon modell neve (pl. openai-codex/gpt-5.3-codex)' })
+  @ValidateIf((o) => o.action === 'sophon_resolve')
+  @IsString()
+  llm_model?: string;
+
+  @ApiPropertyOptional()
+  @ValidateIf((o) => o.action === 'sophon_resolve')
+  @IsString()
+  llm_rationale?: string;
 }
 
 export class TriageRuleCreateDto {

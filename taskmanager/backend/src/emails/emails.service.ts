@@ -225,8 +225,8 @@ export class EmailsService {
   }
 
   /**
-   * Sophon pipeline: store downloaded email with two-stage LLM classification.
-   * Does not create a task until the user approves in Mission Control.
+   * Triage sor: Stage 1-only register → awaiting_sophon (GPT cron dönt).
+   * Ha van llm_model (Stage 2 egy lépésben beküldve), régi viselkedés maradhat.
    */
   async registerTriage(dto: TriageRegisterDto) {
     let stage1ProjectId: string | null = null;
@@ -245,16 +245,35 @@ export class EmailsService {
       if (p) suggestedProjectId = p.id;
     }
 
-    const bothIrrelevant =
-      dto.stage1_classification === 'irrelevant' &&
-      !suggestedProjectId &&
-      !dto.llm_rationale;
+    const hasStage2InPayload =
+      dto.llm_model != null && String(dto.llm_model).trim() !== '';
+
+    const hasStage1Signal =
+      (dto.stage1_classification != null &&
+        String(dto.stage1_classification).trim() !== '') ||
+      (dto.stage1_model != null && String(dto.stage1_model).trim() !== '') ||
+      (dto.stage1_rationale != null &&
+        String(dto.stage1_rationale).trim() !== '') ||
+      stage1ProjectId != null;
 
     let status: EmailTriageQueueStatus;
-    if (bothIrrelevant) {
-      status = EmailTriageQueueStatus.irrelevant;
-    } else if (suggestedProjectId || stage1ProjectId) {
-      status = EmailTriageQueueStatus.pending_review;
+
+    if (!hasStage2InPayload && hasStage1Signal) {
+      // Óránkénti Qwen: mindig Sophonra vár (GPT megerősíti irrelevanciát vagy taskot ad)
+      status = EmailTriageQueueStatus.awaiting_sophon;
+    } else if (hasStage2InPayload) {
+      const bothIrrelevant =
+        dto.stage1_classification === 'irrelevant' &&
+        !suggestedProjectId &&
+        !dto.llm_rationale;
+
+      if (bothIrrelevant) {
+        status = EmailTriageQueueStatus.irrelevant;
+      } else if (suggestedProjectId || stage1ProjectId) {
+        status = EmailTriageQueueStatus.pending_review;
+      } else {
+        status = EmailTriageQueueStatus.fetched;
+      }
     } else {
       status = EmailTriageQueueStatus.fetched;
     }
@@ -339,6 +358,134 @@ export class EmailsService {
       resolvedProject: { select: { id: true, name: true } },
       task: { select: { id: true, shortId: true, title: true } },
     };
+
+    /** GPT cron: egyértelmű → task vagy irreleváns; bizonytalan → ember */
+    if (dto.action === 'sophon_resolve') {
+      if (
+        row.status !== EmailTriageQueueStatus.awaiting_sophon &&
+        row.status !== EmailTriageQueueStatus.fetched
+      ) {
+        throw new BadRequestException(
+          'sophon_resolve: csak awaiting_sophon vagy fetched soron',
+        );
+      }
+      if (
+        !dto.sophon_outcome ||
+        !dto.llm_model?.trim() ||
+        dto.llm_rationale === undefined ||
+        dto.llm_rationale === null
+      ) {
+        throw new BadRequestException(
+          'sophon_resolve: sophon_outcome, llm_model és llm_rationale kötelező',
+        );
+      }
+
+      const llmModel = dto.llm_model.trim();
+      const llmRationale = String(dto.llm_rationale);
+
+      if (dto.sophon_outcome === 'mark_irrelevant') {
+        return this.prisma.emailTriageQueue.update({
+          where: { id },
+          data: {
+            status: EmailTriageQueueStatus.irrelevant,
+            llmModel,
+            llmRationale,
+            suggestedProjectId: null,
+          },
+          include: includeRelations,
+        });
+      }
+
+      if (dto.sophon_outcome === 'needs_human') {
+        let hintId: string | null = null;
+        if (dto.resolved_project_id) {
+          const p = await this.prisma.project.findUnique({
+            where: { id: dto.resolved_project_id },
+          });
+          if (p) hintId = p.id;
+        }
+        return this.prisma.emailTriageQueue.update({
+          where: { id },
+          data: {
+            status: EmailTriageQueueStatus.pending_review,
+            llmModel,
+            llmRationale,
+            ...(hintId != null ? { suggestedProjectId: hintId } : {}),
+          },
+          include: includeRelations,
+        });
+      }
+
+      // create_task
+      const projectId =
+        dto.resolved_project_id ||
+        row.suggestedProjectId ||
+        row.stage1ProjectId;
+      if (!projectId) {
+        throw new BadRequestException(
+          'sophon create_task: nincs projekt (adj meg resolved_project_id vagy legyen Stage1 javaslat)',
+        );
+      }
+      const project = await this.prisma.project.findUnique({
+        where: { id: projectId },
+      });
+      if (!project) throw new BadRequestException('Érvénytelen projekt');
+
+      return this.prisma.$transaction(async (tx) => {
+        await tx.emailTriageQueue.update({
+          where: { id },
+          data: {
+            llmModel,
+            llmRationale,
+            suggestedProjectId: projectId,
+          },
+        });
+
+        const email = await tx.emailMessage.upsert({
+          where: { sourceUid: row.sourceUid },
+          update: {
+            from: row.fromEmail,
+            to: row.toEmail,
+            subject: row.subject,
+            date: row.receivedAt,
+            body: row.bodyText,
+          },
+          create: {
+            from: row.fromEmail,
+            to: row.toEmail,
+            subject: row.subject,
+            date: row.receivedAt,
+            body: row.bodyText,
+            sourceUid: row.sourceUid,
+          },
+        });
+
+        const task = await tx.task.create({
+          data: {
+            projectId,
+            title: row.subject,
+            description: row.bodyText?.slice(0, 2000) ?? undefined,
+            sourceType: TaskSourceType.email,
+            sourceRef: row.sourceUid,
+          },
+        });
+
+        await tx.emailTaskLink.create({
+          data: { emailId: email.id, taskId: task.id },
+        });
+
+        return tx.emailTriageQueue.update({
+          where: { id },
+          data: {
+            status: EmailTriageQueueStatus.approved,
+            taskId: task.id,
+            resolvedProjectId: projectId,
+            reviewedAt: new Date(),
+          },
+          include: includeRelations,
+        });
+      });
+    }
 
     if (dto.action === 'reject') {
       return this.prisma.emailTriageQueue.update({
@@ -557,7 +704,8 @@ export class EmailsService {
    * Designed to be included in the OpenAI prompt for better classification.
    */
   async getTriageContext() {
-    const [projects, rules, recentCorrections] = await Promise.all([
+    const [projects, rules, recentCorrections, awaitingSophon] =
+      await Promise.all([
       this.prisma.project.findMany({
         select: {
           id: true,
@@ -594,6 +742,24 @@ export class EmailsService {
           suggestedProject: { select: { id: true, name: true } },
         },
       }),
+      this.prisma.emailTriageQueue.findMany({
+        where: { status: EmailTriageQueueStatus.awaiting_sophon },
+        orderBy: { receivedAt: 'asc' },
+        take: 100,
+        select: {
+          id: true,
+          sourceUid: true,
+          fromEmail: true,
+          subject: true,
+          bodyText: true,
+          receivedAt: true,
+          stage1Classification: true,
+          stage1Model: true,
+          stage1Rationale: true,
+          stage1ProjectId: true,
+          stage1Project: { select: { id: true, name: true } },
+        },
+      }),
     ]);
 
     return {
@@ -606,6 +772,19 @@ export class EmailsService {
       })),
       rules,
       recentCorrections,
+      awaitingSophonQueue: awaitingSophon.map((r) => ({
+        id: r.id,
+        sourceUid: r.sourceUid,
+        fromEmail: r.fromEmail,
+        subject: r.subject,
+        bodyPreview: r.bodyText?.slice(0, 4000) ?? null,
+        receivedAt: r.receivedAt,
+        stage1Classification: r.stage1Classification,
+        stage1Model: r.stage1Model,
+        stage1Rationale: r.stage1Rationale,
+        stage1ProjectId: r.stage1ProjectId,
+        stage1Project: r.stage1Project,
+      })),
     };
   }
 

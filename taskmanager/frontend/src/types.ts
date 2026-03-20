@@ -145,6 +145,7 @@ export interface FileRoot {
 
 export type EmailTriageQueueStatus =
   | 'fetched'
+  | 'awaiting_sophon'
   | 'irrelevant'
   | 'pending_review'
   | 'approved'

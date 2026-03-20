@@ -265,6 +265,7 @@ model EmailTaskLink {
 /// Email downloaded on Sophon; LLM suggestion + human review before task creation.
 enum EmailTriageQueueStatus {
   fetched
+  awaiting_sophon // Stage 1 (Qwen) kész; GPT még nem döntött — ember nem kell
   irrelevant
   pending_review
   approved

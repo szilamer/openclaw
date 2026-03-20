@@ -4,7 +4,8 @@
   "version": "1.0.0",
   "description": "IMAP check/fetch + Mission Control email intake (OpenClaw workspace skill)",
   "scripts": {
-    "imap": "node scripts/imap.js"
+    "imap": "node scripts/imap.js",
+    "triage-hourly": "bash scripts/email-triage-stage1-hourly.sh"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
